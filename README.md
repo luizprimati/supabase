@@ -135,6 +135,26 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   recarregar a página) - se não aparecer, veja
   [Problemas conhecidos](#problemas-conhecidos-troubleshooting).
 
+  Pra não precisar sair do Studio pra criar uma função nova, o Nginx
+  injeta um botão **"Nova função"** do lado de "Docs"/"Examples" na
+  própria página de Edge Functions do Studio (procura o botão via
+  JavaScript, então funciona mesmo navegando pela SPA sem recarregar a
+  página). Ele só pede o nome, grava um template mínimo (mesma API do
+  `/admin`) e recarrega a página - o código de verdade você edita no
+  editor nativo do Studio (bem melhor que o do `/admin`). Só admins
+  conseguem usar (usuários comuns veem o botão mas recebem erro ao
+  clicar, já que a API por trás é restrita a admin).
+
+  O Studio (essa versão) também tem uma aba **Edge Functions** na barra
+  lateral, mas ela é **só leitura** por decisão da própria Supabase no
+  self-hosted (não existe botão de criar/editar por lá -
+  [supabase/supabase#40543](https://github.com/supabase/supabase/issues/40543)) -
+  ela lista o que já existe em `volumes/functions`, mas quem cria/edita
+  de verdade é este painel em `/admin`. Depois de criar/editar uma
+  função aqui, ela aparece na aba do Studio ao clicar em "Refresh" (ou
+  recarregar a página) - se não aparecer, veja
+  [Problemas conhecidos](#problemas-conhecidos-troubleshooting).
+
 Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
@@ -201,6 +221,21 @@ por fora).
 Encontrados e resolvidos durante o deploy inicial neste servidor — deixando
 registrado para não repetir o mesmo caminho:
 
+- **Nginx recusa subir (site inteiro fora do ar, nem `/login` carrega)
+  depois de editar `nginx.conf.tpl`.** Se o texto novo tiver um `$`
+  solto (por exemplo dentro de uma regex JavaScript injetada via
+  `sub_filter`), o Nginx tenta interpretar como o começo de uma
+  variável dele mesmo (é assim que `$host`/`$scheme` funcionam nesse
+  arquivo) e recusa a config inteira se não achar essa "variável" -
+  derrubando o Nginx (e com ele tudo atrás da porta 9443, já que é o
+  único ponto de entrada). Já aconteceu com um botão injetado no
+  Studio que tinha `{0,62}$/` numa regex de validação. Ao adicionar
+  HTML/JS via `sub_filter`, evite `$` sempre que possível (nesse caso,
+  trocamos a regex por uma checagem char-a-char); se for
+  inevitável, `\$` escapa como literal. Sem `nginx -t` disponível pra
+  validar antes de mandar, a checagem mais confiável é contar os `$`
+  do arquivo antes/depois da mudança e confirmar que só mudou onde
+  era esperado.
 - **Funções criadas em `/admin` não aparecem em lugar nenhum (nem na aba
   Edge Functions do Studio, nem sobrevivem a um `docker compose down`).**
   `sh run.sh restart <serviço>` só reinicia o processo - ele **não** aplica
