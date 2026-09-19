@@ -1078,6 +1078,12 @@ const STUDIO_INJECT_JS = `(function () {
     input.style.fontFamily = 'inherit';
     input.style.marginBottom = '4px';
     input.style.outline = 'none';
+    // O Studio roda com color-scheme escuro; sem isso o navegador usa
+    // texto/caret claros (nativos do modo escuro) sobre o fundo branco
+    // do nosso modal, e o que a pessoa digita fica invisível.
+    input.style.colorScheme = 'light';
+    input.style.background = '#fff';
+    input.style.color = '#1c1c1c';
     input.addEventListener('focus', function () { input.style.borderColor = '#3ecf8e'; });
     input.addEventListener('blur', function () { input.style.borderColor = '#d4d4d4'; });
 
