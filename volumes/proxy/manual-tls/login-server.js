@@ -74,18 +74,24 @@ function findUser(users, username) {
   return users.find((u) => u.username === username);
 }
 
+// O nome de usuário é codificado em base64url antes de entrar no token:
+// o alfabeto do base64url nunca contém ".", então usuários com ponto no
+// nome (ex: "luiz.primati") não quebram o split('.') abaixo.
 function makeToken(username) {
   const expires = Date.now() + SESSION_HOURS * 3600 * 1000;
-  const payload = `${username}.${expires}`;
+  const encodedUser = Buffer.from(username, 'utf8').toString('base64url');
+  const payload = `${encodedUser}.${expires}`;
   return Buffer.from(`${payload}.${sign(payload)}`).toString('base64url');
 }
 
 function verifyToken(token) {
   try {
-    const [username, expiresStr, sig] = Buffer.from(token, 'base64url').toString('utf8').split('.');
-    if (!username || !expiresStr || !sig) return false;
+    const parts = Buffer.from(token, 'base64url').toString('utf8').split('.');
+    if (parts.length !== 3) return false;
+    const [encodedUser, expiresStr, sig] = parts;
     if (Date.now() > parseInt(expiresStr, 10)) return false;
-    if (!safeEqual(sig, sign(`${username}.${expiresStr}`))) return false;
+    if (!safeEqual(sig, sign(`${encodedUser}.${expiresStr}`))) return false;
+    const username = Buffer.from(encodedUser, 'base64url').toString('utf8');
     // Reconfirma que o usuário ainda existe no arquivo - permite revogar
     // acesso na hora só removendo a entrada, sem esperar o cookie expirar.
     return Boolean(findUser(loadUsers(), username));
