@@ -150,9 +150,23 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   `login-server.js`), não embutido direto no `nginx.conf.tpl` - veja
   [Problemas conhecidos](#problemas-conhecidos-troubleshooting) sobre
   o limite de tamanho do Nginx que motivou isso. Só admins conseguem
-  usar (usuários
-  comuns veem o botão mas recebem erro ao
-  clicar, já que a API por trás é restrita a admin).
+  usar (usuários comuns veem o botão mas recebem erro ao clicar, já
+  que a API por trás é restrita a admin).
+
+  Editar o código de uma função existente também funciona **direto no
+  editor do Studio**, apesar dele vir só-leitura no self-hosted: o
+  `studio-inject.js` acessa a instância do Monaco (o editor por trás,
+  exposta como `window.monaco` pelo próprio Studio) e destrava a
+  escrita, além de acrescentar um botão flutuante **"Salvar"** que
+  grava o conteúdo atual do editor via `/admin/api/functions/<nome>` -
+  a mesma API usada em tudo isso. Como o self-hosted não tem rota de
+  "deploy" própria (não existe `POST .../functions/deploy` nessa
+  versão), sem esse botão não haveria como salvar mesmo com o editor
+  destravado. Isso depende de `window.monaco` continuar exposto
+  globalmente pelo Studio (é assim que a versão atual carrega o
+  editor) - se uma atualização futura do Studio mudar isso, o botão
+  simplesmente não aparece (o editor pode continuar só-leitura, mas
+  nada quebra).
 
 Quem é `"user"` não vê esse painel (dá 403).
 
