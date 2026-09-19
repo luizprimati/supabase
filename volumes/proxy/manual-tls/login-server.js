@@ -66,6 +66,20 @@ function saveUsers(users) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
 }
 
+// Escreve e responde 500 em vez de deixar uma exceção (ex: arquivo
+// montado como somente leitura) derrubar o processo inteiro - isso já
+// aconteceu uma vez e tirou o login do ar até o restart automático.
+function trySaveUsers(res, users) {
+  try {
+    saveUsers(users);
+    return true;
+  } catch (e) {
+    console.error(`Não foi possível gravar ${USERS_FILE}: ${e.message}`);
+    sendJson(res, 500, { error: 'Não foi possível salvar - o arquivo users.json está gravável no container?' });
+    return false;
+  }
+}
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -680,7 +694,20 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Qualquer erro não previsto aqui dentro (ex: disco cheio, permissão de
+// arquivo) derrubaria o processo inteiro e, com ele, o acesso ao Studio
+// inteiro (o auth_request do Nginx depende deste serviço) - por isso todo
+// o tratamento de requisição fica dentro de um try/catch.
 const server = http.createServer((req, res) => {
+  try {
+    handleRequest(req, res);
+  } catch (e) {
+    console.error('Erro tratando requisição:', e);
+    if (!res.headersSent) sendJson(res, 500, { error: 'Erro interno.' });
+  }
+});
+
+function handleRequest(req, res) {
   const url = new URL(req.url, 'http://internal');
 
   // Chamado pelo Nginx via auth_request - nunca exposto direto ao cliente.
@@ -777,7 +804,7 @@ const server = http.createServer((req, res) => {
         const users = loadUsers();
         if (findUser(users, username)) { sendJson(res, 409, { error: 'Já existe um usuário com esse nome.' }); return; }
         users.push({ username, role, ...hashPassword(password) });
-        saveUsers(users);
+        if (!trySaveUsers(res, users)) return;
         sendJson(res, 201, { username, role });
       });
       return;
@@ -805,7 +832,7 @@ const server = http.createServer((req, res) => {
             if (data.password.length < 8) { sendJson(res, 400, { error: 'A senha precisa ter ao menos 8 caracteres.' }); return; }
             Object.assign(target, hashPassword(data.password));
           }
-          saveUsers(users);
+          if (!trySaveUsers(res, users)) return;
           sendJson(res, 200, { username: target.username, role: target.role });
         });
         return;
@@ -816,7 +843,7 @@ const server = http.createServer((req, res) => {
           sendJson(res, 400, { error: 'Não é possível excluir o último administrador.' });
           return;
         }
-        saveUsers(users.filter((u) => u.username !== targetUsername));
+        if (!trySaveUsers(res, users.filter((u) => u.username !== targetUsername))) return;
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -825,6 +852,6 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404);
   res.end('not found');
-});
+}
 
 server.listen(PORT, () => console.log(`login-server ouvindo na porta ${PORT}`));

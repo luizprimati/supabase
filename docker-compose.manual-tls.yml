@@ -51,7 +51,8 @@ services:
       # Usuários (usuário + salt + hash scrypt) - veja
       # volumes/proxy/manual-tls/users.example.json para o formato. Nunca
       # versionado (contém os hashes reais); crie a partir do .example.
-      - ./volumes/proxy/manual-tls/users.json:/app/users.json:ro
+      # Gravável (sem ":ro") - o CRUD em /admin escreve neste arquivo.
+      - ./volumes/proxy/manual-tls/users.json:/app/users.json
 
   nginx:
     container_name: supabase-nginx-manual
