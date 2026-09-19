@@ -596,6 +596,15 @@ ${THEME_CSS}
   }
   .row-actions button:hover { border-color: var(--accent); color: var(--accent); }
   .row-actions button.danger:hover { border-color: var(--danger-text); color: var(--danger-text); }
+  .row-actions button.icon-only { padding: 6px; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; }
+  .confirm-popover {
+    position: fixed; z-index: 10000; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; width: 240px; box-shadow: 0 12px 32px var(--shadow);
+    font-size: 13px; color: var(--text);
+  }
+  .confirm-popover p { margin: 0 0 12px; line-height: 1.4; }
+  .confirm-popover .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .confirm-popover .confirm-actions button { padding: 5px 12px; font-size: 12px; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 
   .overlay {
@@ -704,7 +713,6 @@ ${THEME_CSS}
       <textarea id="fn-code"></textarea>
       <p class="fn-url" id="fnUrlHint"></p>
       <div class="editor-actions">
-        <button type="button" class="btn btn-danger" id="fnDeleteBtn" style="display:none">Excluir</button>
         <div class="spacer"></div>
         <button type="button" class="btn" id="fnCancelBtn">Cancelar</button>
         <button type="button" class="btn btn-primary" id="fnSaveBtn">Salvar</button>
@@ -839,7 +847,6 @@ ${THEME_CSS}
     var fnCodeArea = document.getElementById('fn-code');
     var fnFormMsg = document.getElementById('fnFormMsg');
     var fnUrlHint = document.getElementById('fnUrlHint');
-    var fnDeleteBtn = document.getElementById('fnDeleteBtn');
     var editingFunctionName = null;
     var fnEditor = null;
     var FUNCTION_TEMPLATE = ${JSON.stringify(FUNCTION_TEMPLATE)};
@@ -871,7 +878,6 @@ ${THEME_CSS}
         document.getElementById('fnFormTitle').textContent = 'Editar ' + name;
         fnNameField.value = name;
         fnNameField.disabled = true;
-        fnDeleteBtn.style.display = '';
         fnUrlHint.textContent = window.location.origin + '/functions/v1/' + name;
         setCode('');
         fetch('/admin/api/functions/' + encodeURIComponent(name)).then(function (r) { return r.json(); }).then(function (d) {
@@ -881,7 +887,6 @@ ${THEME_CSS}
         document.getElementById('fnFormTitle').textContent = 'Nova função';
         fnNameField.value = '';
         fnNameField.disabled = false;
-        fnDeleteBtn.style.display = 'none';
         fnUrlHint.textContent = '';
         setCode(FUNCTION_TEMPLATE);
       }
@@ -916,17 +921,65 @@ ${THEME_CSS}
         });
     });
 
-    fnDeleteBtn.addEventListener('click', function () {
-      if (!editingFunctionName) return;
-      if (!confirm('Excluir a função "' + editingFunctionName + '"? Essa ação não pode ser desfeita.')) return;
-      fetch('/admin/api/functions/' + encodeURIComponent(editingFunctionName), { method: 'DELETE' })
-        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-        .then(function (res) {
-          if (!res.ok) { alert(res.d.error || 'Não foi possível excluir.'); return; }
-          closeFunctionEditor();
-          loadFunctions();
-        });
-    });
+    var PENCIL_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>';
+    var TRASH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+
+    // Popover de confirmação próprio (em vez do confirm() nativo do
+    // navegador), ancorado perto do botão que abriu ele.
+    function showConfirmPopover(anchorEl, message, onConfirm) {
+      var existing = document.getElementById('__confirmPopover');
+      if (existing) existing.remove();
+
+      var popover = document.createElement('div');
+      popover.id = '__confirmPopover';
+      popover.className = 'confirm-popover';
+
+      var text = document.createElement('p');
+      text.textContent = message;
+
+      var actions = document.createElement('div');
+      actions.className = 'confirm-actions';
+
+      var cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn';
+      cancelBtn.textContent = 'Cancelar';
+
+      var confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'btn btn-danger';
+      confirmBtn.textContent = 'Excluir';
+
+      function close() {
+        popover.remove();
+        document.removeEventListener('mousedown', onOutsideClick, true);
+      }
+      function onOutsideClick(e) {
+        if (!popover.contains(e.target) && e.target !== anchorEl) close();
+      }
+
+      cancelBtn.addEventListener('click', close);
+      confirmBtn.addEventListener('click', function () {
+        close();
+        onConfirm();
+      });
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(confirmBtn);
+      popover.appendChild(text);
+      popover.appendChild(actions);
+      document.body.appendChild(popover);
+
+      var rect = anchorEl.getBoundingClientRect();
+      var popRect = popover.getBoundingClientRect();
+      var left = Math.min(rect.left, window.innerWidth - popRect.width - 12);
+      var top = rect.bottom + 8;
+      if (top + popRect.height > window.innerHeight) top = rect.top - popRect.height - 8;
+      popover.style.left = Math.max(12, left) + 'px';
+      popover.style.top = top + 'px';
+
+      setTimeout(function () { document.addEventListener('mousedown', onOutsideClick, true); }, 0);
+    }
 
     function loadFunctions() {
       fetch('/admin/api/functions').then(function (r) { return r.json(); }).then(function (names) {
@@ -938,8 +991,21 @@ ${THEME_CSS}
           tr.innerHTML =
             '<td>' + name + '</td>' +
             '<td class="fn-url">' + fnUrl + '</td>' +
-            '<td><div class="row-actions"><button data-action="edit">Editar</button></div></td>';
+            '<td><div class="row-actions">' +
+              '<button data-action="edit" class="icon-only" title="Editar" aria-label="Editar">' + PENCIL_ICON + '</button>' +
+              '<button data-action="delete" class="icon-only danger" title="Excluir" aria-label="Excluir">' + TRASH_ICON + '</button>' +
+            '</div></td>';
           tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openFunctionEditor(name); });
+          tr.querySelector('[data-action="delete"]').addEventListener('click', function (e) {
+            showConfirmPopover(e.currentTarget, 'Excluir a função "' + name + '"? Essa ação não pode ser desfeita.', function () {
+              fetch('/admin/api/functions/' + encodeURIComponent(name), { method: 'DELETE' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (res) {
+                  if (!res.ok) { alert(res.d.error || 'Não foi possível excluir.'); return; }
+                  loadFunctions();
+                });
+            });
+          });
           body.appendChild(tr);
         });
       });
