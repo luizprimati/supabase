@@ -227,8 +227,9 @@ function themeToggleScript() {
   `;
 }
 
-function renderPage({ error, redirect }) {
+function renderPage({ error, redirect, session }) {
   const safeRedirect = (redirect || '/').replace(/"/g, '&quot;');
+  const loggedIn = Boolean(session);
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -251,11 +252,17 @@ ${THEME_CSS}
     color: var(--accent); font-weight: 700; letter-spacing: -0.02em;
   }
   .landing p.desc { max-width: 560px; color: var(--text-muted); font-size: 17px; line-height: 1.6; margin: 0 0 32px; }
+  .landing .actions { display: flex; gap: 12px; flex-wrap: wrap; }
   .landing .cta {
     display: inline-block; padding: 12px 28px; border: none; border-radius: 8px;
     background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 15px; cursor: pointer;
+    text-decoration: none;
   }
   .landing .cta:hover { background: var(--accent-hover); }
+  .landing .cta.secondary {
+    background: transparent; border: 1px solid var(--border-strong); color: var(--text);
+  }
+  .landing .cta.secondary:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
 
   .features {
     max-width: 1100px; margin: 0 auto; padding: 0 32px 80px;
@@ -338,8 +345,9 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
-      <a class="btn" href="/admin">Gerenciar usuários</a>
-      <button class="btn" id="enterBtn" type="button">Entrar</button>
+      ${loggedIn
+        ? `<a class="btn" href="/logout">Sair</a>`
+        : `<button class="btn" id="enterBtn" type="button">Entrar</button>`}
     </div>
   </nav>
 
@@ -347,7 +355,12 @@ ${THEME_CSS}
     <h1>${PROJECT_TITLE}</h1>
     <p class="tagline">${PROJECT_TAGLINE}</p>
     <p class="desc">${PROJECT_DESCRIPTION}</p>
-    <button class="cta" id="ctaBtn" type="button">Acessar o painel</button>
+    ${loggedIn
+      ? `<div class="actions">
+          <a class="cta" href="/admin">Gerenciar usuários</a>
+          <a class="cta secondary" href="/">Ir para o Supabase</a>
+        </div>`
+      : `<button class="cta" id="ctaBtn" type="button">Acessar o painel</button>`}
   </div>
 
   <div class="features">
@@ -388,6 +401,7 @@ ${THEME_CSS}
     </div>
   </div>
 
+  ${loggedIn ? '' : `
   <div class="overlay${error ? ' open' : ''}" id="overlay">
     <div class="card">
       <button class="close" id="closeBtn" type="button" aria-label="Fechar">&times;</button>
@@ -417,10 +431,11 @@ ${THEME_CSS}
       </form>
     </div>
   </div>
+  `}
 
   <script>
     ${themeToggleScript()}
-
+    ${loggedIn ? '' : `
     var overlay = document.getElementById('overlay');
     function openOverlay() { overlay.classList.add('open'); }
     document.getElementById('enterBtn').addEventListener('click', openOverlay);
@@ -438,6 +453,7 @@ ${THEME_CSS}
       pwd.type = showing ? 'password' : 'text';
       eyeIcon.innerHTML = showing ? EYE_OPEN : EYE_OFF;
     });
+    `}
   </script>
 </body>
 </html>`;
@@ -719,8 +735,20 @@ function handleRequest(req, res) {
   }
 
   if (url.pathname === '/login' && req.method === 'GET') {
+    // Usuário comum logado nunca vê a tela de abertura - vai direto pro
+    // Supabase. Só admin tem um estado "logado" nessa página (o hub com
+    // os botões extras); sessão nula = tela de login normal.
+    const sessionUser = getSessionUser(req);
+    if (sessionUser && !isAdmin(sessionUser)) {
+      res.writeHead(302, { Location: '/' });
+      res.end();
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderPage({ redirect: url.searchParams.get('rd') || '/' }));
+    res.end(renderPage({
+      redirect: url.searchParams.get('rd') || '/',
+      session: sessionUser ? { username: sessionUser.username } : null,
+    }));
     return;
   }
 
@@ -733,9 +761,16 @@ function handleRequest(req, res) {
       const user = findUser(loadUsers(), username);
       const ok = Boolean(user) && verifyPassword(password, user.salt, user.hash);
       if (ok) {
+        // Sem um destino específico (rd só veio "/" ou "/login"): usuário
+        // comum vai direto pro Supabase; admin cai de volta em /login,
+        // que já sabe se mostrar como hub pra quem está logado.
+        let finalRedirect = redirect;
+        if (redirect === '/' || redirect === '/login') {
+          finalRedirect = isAdmin(user) ? '/login' : '/';
+        }
         res.writeHead(302, {
           'Set-Cookie': `${COOKIE_NAME}=${makeToken(username)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}`,
-          Location: redirect,
+          Location: finalRedirect,
         });
         res.end();
       } else {
