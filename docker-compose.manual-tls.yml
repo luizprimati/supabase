@@ -1,0 +1,50 @@
+# Override para servidores onde 80/443 já pertencem a outro serviço (aqui:
+# AzuraCast) e o provedor de DNS (Wix) não tem API para o desafio DNS-01
+# automático. O certificado é emitido manualmente com certbot fora do
+# Docker (veja docs/certbot-manual-dns.md) e só é consumido aqui, como
+# arquivo estático - este container não fala com a Let's Encrypt.
+#
+# Nada é publicado na porta 80/443 do host: só esta porta nova
+# (SUPABASE_PROXY_PORT, padrão 9443) é exposta, então não há disputa de
+# porta com nada que já exista no servidor.
+#
+# Uso:
+#   sh run.sh config add manual-tls
+#   sh run.sh start
+
+services:
+  # Gateway e Studio deixam de ser publicados no host: só são alcançados
+  # pela rede interna do compose, através do container "nginx" abaixo.
+  api-gw:
+    ports: !reset []
+
+  nginx:
+    container_name: supabase-nginx-manual
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${SUPABASE_PROXY_PORT:-9443}:443"
+    depends_on:
+      api-gw:
+        condition: service_healthy
+      studio:
+        condition: service_healthy
+    environment:
+      PROXY_DOMAIN: ${PROXY_DOMAIN}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssl >/dev/null
+        printf '%s:%s\n' "$$DASHBOARD_USERNAME" "$$(openssl passwd -apr1 "$$DASHBOARD_PASSWORD")" > /etc/nginx/dashboard-passwd
+        envsubst '$$PROXY_DOMAIN' < /etc/nginx/templates/nginx.conf.tpl > /etc/nginx/conf.d/default.conf
+        exec nginx -g 'daemon off;'
+    volumes:
+      - ./volumes/proxy/manual-tls/nginx.conf.tpl:/etc/nginx/templates/nginx.conf.tpl:ro
+      # /etc/letsencrypt do HOST (gerado pelo certbot manual, veja
+      # docs/certbot-manual-dns.md), montado direto e read-only - sem
+      # precisar copiar nada para dentro do repositório.
+      - /etc/letsencrypt:/etc/nginx/certs:ro

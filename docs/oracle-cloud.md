@@ -1,123 +1,108 @@
-# Rede no Oracle Cloud (OCI): liberando portas sem derrubar a rádio
+# Rede no Oracle Cloud: este servidor, especificamente
 
-O OCI tem **duas camadas de firewall** independentes. As duas precisam liberar
-a porta, senão nada funciona — e é fácil esquecer a segunda, que é a mais
-comum de pegar quem já mexeu só com o Security Group da AWS:
+Levantamento feito em 2026-09-19 via SSH direto na instância. Números e
+decisões abaixo são específicos deste servidor — não genéricos.
 
-1. **Security List / Network Security Group (NSG)** — regra no console web da
-   Oracle, na VCN da instância. Controla o tráfego "de fora para a VCN".
-2. **Firewall dentro da própria instância** (`iptables`/`netfilter` no
-   Ubuntu, ou `firewalld` no Oracle Linux) — as imagens oficiais da Oracle já
-   vêm com regras `iptables` que **bloqueiam por padrão** portas que não
-   sejam 22 (SSH). Mesmo com o NSG liberado, se você não abrir aqui também,
-   a porta continua fechada.
+## O que já roda aqui
 
-## 1. Descobrir o que já está exposto (a rádio)
+- **Shape:** `VM.Standard.A1.Flex` (ARM Ampere, região `sa-vinhedo-1`), 2
+  OCPUs, 12 GB RAM. ~10 GB de RAM disponível, 150 GB de disco livre, carga
+  quase zero. **Sobra confortável para o Supabase self-hosted.**
+- **Docker** 29.1.3 + Compose v5.3.1 já instalados.
+- **A rádio é o AzuraCast** (`ghcr.io/azuracast/azuracast:stable`), rodando
+  há 2 meses, e ele é dono de:
+  - Portas **80 e 443** (`0.0.0.0`, todas as interfaces).
+  - Toda a faixa **8000-8999** (mounts/relays de estações — cada estação
+    reserva um bloco de 5 portas: `8005-8006`, `8010`, `8015-8016`...).
+    Mesmo as portas dessa faixa que não têm nada escutando agora podem ser
+    alocadas para uma estação nova no futuro — evite usar qualquer porta
+    dentro de 8000-8999 para outra coisa.
+  - Porta `2022` (provavelmente SFTP do AzuraCast).
+- Porta `8080` tem um processo `python3` de baixo PID (bem antigo, do boot)
+  — não mexer, provavelmente é o agente de monitoramento da própria Oracle
+  Cloud.
+- `iptables` (`INPUT`) já libera: 22, 80, 443, 2022, 3000, 8080 e o bloco
+  8000-8999. Política padrão é `ACCEPT` com um `REJECT` só no final da
+  chain — ou seja, o que não está numa regra específica cai nesse reject.
 
-Antes de mexer em qualquer firewall, veja o que já está rodando e em qual
-porta, para não derrubar a rádio:
+## Decisão tomada: Supabase numa porta própria, sem tocar no AzuraCast
+
+Como 80/443 já têm dono e a faixa 8000-8999 é da rádio, o Supabase usa:
+
+- **Porta pública nova: `9443`** (HTTPS) — fora de qualquer faixa da rádio,
+  livre neste servidor.
+- Certificado emitido manualmente via DNS-01 (não depende de porta 80/443
+  — veja [`certbot-manual-dns.md`](certbot-manual-dns.md)), porque o Wix
+  não oferece API de DNS para automatizar isso.
+- Gateway (Envoy) e Studio do Supabase **não são publicados no host** —
+  só o container Nginx do override `manual-tls` fala com a rede externa,
+  na 9443. Isso elimina qualquer chance de colisão com as portas da rádio.
+
+Resultado: **nenhuma configuração do AzuraCast é tocada.**
+
+## Liberar a porta 9443
+
+### Security List / NSG (console OCI)
+
+**Menu ☰ → Networking → Virtual Cloud Networks → (sua VCN) → Security
+Lists** (ou **Network Security Groups**, se a instância usa NSG — confira
+em **Compute → Instances → (sua instância) → Attached VNICs**).
+
+Adicione um Ingress:
+
+| Origem | Protocolo | Porta destino |
+|---|---|---|
+| `0.0.0.0/0` | TCP | 9443 |
+
+Não precisa mexer nas regras de 80/443/8000-8999 — são da rádio, já
+liberadas, e o Supabase não usa nenhuma delas.
+
+### iptables da instância
 
 ```bash
-sudo ss -tlnp
-# ou, se preferir:
-sudo docker ps            # se a rádio também roda em container
-sudo systemctl status nginx caddy 2>/dev/null
-```
-
-Se a porta 80 e/ou 443 já estiverem ocupadas (Nginx/Caddy da rádio), o
-Supabase **não pode** usar seu próprio Caddy/Nginx nessas portas — veja a
-seção "Convivendo com um proxy que já existe" no README principal.
-
-## 2. Security List / NSG (console OCI)
-
-No console: **Menu ☰ → Networking → Virtual Cloud Networks → (sua VCN) →
-Security Lists** (ou **Network Security Groups**, se a instância usa NSG em
-vez de Security List — confira em **Compute → Instances → (sua instância) →
-Attached VNICs → sua VNIC**).
-
-Adicione regras de **Ingress**:
-
-| Origem (Source CIDR) | Protocolo | Porta destino | Motivo |
-|---|---|---|---|
-| `0.0.0.0/0` | TCP | 80 | HTTP (redirect para HTTPS, validação Let's Encrypt) |
-| `0.0.0.0/0` | TCP | 443 | HTTPS (Studio + API do Supabase) |
-
-**Não abra** a 5432 (Postgres) nem a 6543 (pooler) para `0.0.0.0/0`. Essas
-portas não precisam ser públicas — o `docker-compose.override.yml` deste
-projeto já as restringe a `127.0.0.1` (veja `docker-compose.override.yml.example`
-na raiz do repo).
-
-## 3. Firewall da instância (iptables / firewalld)
-
-### Ubuntu (imagem padrão OCI usa `iptables` com `netfilter-persistent`)
-
-```bash
-sudo iptables -I INPUT -p tcp --dport 80  -j ACCEPT
-sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
-
-# Persistir entre reboots:
+sudo iptables -I INPUT -p tcp --dport 9443 -j ACCEPT
 sudo netfilter-persistent save
-# (se o pacote não existir: sudo apt-get install -y iptables-persistent)
 ```
 
-Confira a posição da regra: em algumas imagens já existe uma regra
-`REJECT`/`DROP` no fim da chain `INPUT`. Use `sudo iptables -L INPUT -n
---line-numbers` e, se precisar, insira antes dela com `-I INPUT <linha>`.
-
-### Oracle Linux (usa `firewalld`)
-
-```bash
-sudo firewall-cmd --permanent --add-port=80/tcp
-sudo firewall-cmd --permanent --add-port=443/tcp
-sudo firewall-cmd --reload
-```
+Confira a posição: `sudo iptables -L INPUT -n --line-numbers` — a regra
+precisa ficar **antes** do `REJECT` no fim da chain (linha 11 no
+levantamento original; pode ter mudado — confira antes de inserir).
 
 ### Testar de fora
 
-Depois das duas camadas liberadas, teste de outra máquina (seu computador,
-não de dentro do servidor):
-
 ```bash
-curl -I http://SEU_IP_PUBLICO
+curl -kI https://SEU_IP_PUBLICO:9443
 ```
 
-Se der timeout, o problema é firewall (NSG ou iptables). Se der "connection
-refused", o firewall está ok mas nada está escutando nessa porta ainda
-(normal antes de subir os containers).
+Timeout = firewall (NSG ou iptables) ainda não liberou. "Connection
+refused" = firewall ok, containers do Supabase ainda não subiram.
 
-## 4. DNS — subdomínio no Wix (`valletibooks.com.br`)
+## DNS — subdomínio no Wix
 
-1. Painel Wix → **Configurações do domínio** (ou `wix.com` → *Meus domínios*
-   → `valletibooks.com.br` → **DNS**).
-2. Adicione um registro:
+1. Painel Wix → **Configurações do domínio** → `valletibooks.com.br` →
+   **DNS** → adicionar registro:
    - Tipo: **A**
-   - Nome/Host: `supabase` (resulta em `supabase.valletibooks.com.br`)
-   - Valor: o **IP público** da instância Oracle (fixo — na OCI, reserve um
-     IP público **reservado** em vez do efêmero padrão, para ele não mudar
-     se a instância for reiniciada/recriada: **Networking → IP Management →
-     Reserved Public IPs**).
-   - TTL: padrão (ou o menor disponível, para propagar rápido durante os
-     testes).
-3. Propagação costuma levar de alguns minutos a 1h. Teste com:
-   ```bash
-   dig +short supabase.valletibooks.com.br
-   ```
-   até aparecer o IP correto.
+   - Nome/Host: `supabase`
+   - Valor: `167.126.27.216` (IP público atual da instância — se você
+     reservar um IP fixo depois em **Networking → IP Management →
+     Reserved Public IPs**, atualize aqui).
+   - TTL: padrão.
+2. Confirme com `dig +short supabase.valletibooks.com.br` até aparecer o
+   IP correto.
+3. O acesso final é `https://supabase.valletibooks.com.br:9443` — a porta
+   faz parte da URL, não tem como ficar "escondida" sem mexer no
+   AzuraCast (veja o README para as alternativas que foram descartadas e
+   por quê).
 
-## 5. Recursos: o free tier aguenta o Supabase self-hosted junto com a rádio?
+## Postgres/pooler nunca públicos
 
-O stack completo do Supabase sobe ~12 containers (Postgres, Auth, PostgREST,
-Realtime, Storage, imgproxy, postgres-meta, Edge Functions, gateway, Studio,
-pooler). Isso não cabe confortavelmente numa VM **AMD Micro** do Always Free
-(1 OCPU / 1 GB RAM) — vai sofrer com OOM.
+`docker-compose.override.yml.example` já restringe as portas 5432/6543 do
+Supabase a `127.0.0.1`. Não crie regra nenhuma pra elas no Security
+List/NSG — não precisam ser alcançáveis de fora do próprio servidor.
 
-Se seu servidor Oracle é uma instância **Ampere A1 (ARM)** do Always Free
-(até 4 OCPU / 24 GB RAM no total, divisível entre instâncias), há folga de
-sobra rodando junto com a rádio. Pontos de atenção:
+## Sobre habilitar analytics (Logflare)
 
-- As imagens do Supabase são multi-arch (funcionam em ARM), então A1 funciona
-  bem.
-- Recomendo **não habilitar** o override `docker-compose.logs.yml`
-  (Logflare + Vector) a menos que precise de analytics — ele adiciona 2
-  containers e consumo de RAM sem necessidade para uma instância pequena.
-- Monitore com `docker stats` nos primeiros dias.
+Com 12 GB de RAM disponíveis, não é uma questão de recursos aqui. Mesmo
+assim, mantenha `docker-compose.logs.yml` desabilitado a menos que você
+realmente vá usar os logs/analytics do Studio — são 2 containers a mais
+sem necessidade.
