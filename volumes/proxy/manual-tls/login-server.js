@@ -569,10 +569,19 @@ ${THEME_CSS}
      mesmo estando definida antes dela no arquivo - CSS resolve empate de
      especificidade pela ordem, e ".card" (mais abaixo) tinha um
      max-width menor que sempre vencia. */
-  .card.editor-card { max-width: min(1900px, 96vw); width: 96vw; }
+  .card.editor-card { max-width: min(1300px, 68vw); width: 68vw; min-width: 480px; }
   .fn-url { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text-muted); word-break: break-all; }
-  .CodeMirror { height: 380px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
-  textarea#fn-code { width: 100%; height: 380px; margin-bottom: 16px; }
+  .CodeMirror { height: 456px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+  textarea#fn-code { width: 100%; height: 456px; margin-bottom: 16px; }
+  /* Linha de ações do editor de funções - usa os mesmos .btn/.btn-primary/
+     .btn-danger do resto da interface (nav, toolbar) em vez do
+     .card-actions esticado (feito só para o formulário pequeno de
+     usuário), que fica gigante/estranho numa largura maior. Excluir fica
+     isolado à esquerda (ação destrutiva); Cancelar/Salvar agrupados à
+     direita - padrão comum de rodapé de diálogo. */
+  .editor-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .editor-actions .spacer { flex: 1; }
+  .editor-actions .btn { padding: 10px 22px; }
   .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
   .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
   table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -698,9 +707,10 @@ ${THEME_CSS}
       <label for="fn-code">Código (index.ts)</label>
       <textarea id="fn-code"></textarea>
       <p class="fn-url" id="fnUrlHint"></p>
-      <div class="card-actions">
-        <button type="button" class="btn" id="fnCancelBtn">Cancelar</button>
+      <div class="editor-actions">
         <button type="button" class="btn btn-danger" id="fnDeleteBtn" style="display:none">Excluir</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn" id="fnCancelBtn">Cancelar</button>
         <button type="button" class="btn btn-primary" id="fnSaveBtn">Salvar</button>
       </div>
     </div>
