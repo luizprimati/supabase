@@ -55,6 +55,12 @@ server {
         proxy_pass http://login:8085;
     }
 
+    # CRUD de usuários (só para quem é "admin" - o próprio login-server.js
+    # faz essa checagem e devolve 302/403 quando não pode).
+    location /admin {
+        proxy_pass http://login:8085;
+    }
+
     location / {
         auth_request /internal-auth;
         error_page 401 = @login_redirect;

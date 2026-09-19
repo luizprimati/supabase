@@ -106,14 +106,24 @@ Isso imprime `{"salt": "...", "hash": "..."}`. Edite
 
 ```json
 [
-  { "username": "luiz", "salt": "...", "hash": "..." },
-  { "username": "outra-pessoa", "salt": "...", "hash": "..." }
+  { "username": "luiz", "salt": "...", "hash": "...", "role": "admin" },
+  { "username": "outra-pessoa", "salt": "...", "hash": "...", "role": "user" }
 ]
 ```
+
+`"role"` é `"admin"` ou `"user"` (padrão se omitido). **Pelo menos um
+usuário precisa ser `"admin"`** — é ele quem consegue acessar
+`https://SEU_DOMINIO:9443/admin`, uma telinha de CRUD para cadastrar,
+editar (senha/papel) e excluir os demais usuários direto pelo navegador,
+sem precisar mexer em `users.json` ou rodar `hash-password.js` de novo.
+Quem é `"user"` não vê essa tela (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
 login. Remova a entrada de exemplo (`"exemplo"`) depois de adicionar as
 suas.
+
+A tela de login tem um alternador de tema claro/escuro (ícone ao lado de
+"Entrar" na barra de navegação) — a preferência fica salva no navegador.
 
 Para trocar o texto da tela de abertura (título, subtítulo, descrição),
 defina no `.env`:

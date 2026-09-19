@@ -11,8 +11,9 @@
 //
 // Múltiplos usuários: credenciais ficam em USERS_FILE (padrão
 // /app/users.json), formato:
-//   [{"username": "luiz", "salt": "...", "hash": "..."}, ...]
-// Gere uma entrada com: node hash-password.js "a-senha-aqui"
+//   [{"username": "luiz", "salt": "...", "hash": "...", "role": "admin"}]
+// "role" é "admin" ou "user" (padrão). Só quem é "admin" vê /admin (CRUD
+// de usuários). Gere uma entrada com: node hash-password.js "a-senha-aqui"
 // (nunca senha em texto puro no arquivo - só salt+hash via scrypt).
 
 const http = require('http');
@@ -27,9 +28,7 @@ const USERS_FILE = process.env.USERS_FILE || '/app/users.json';
 const COOKIE_NAME = 'supabase_studio_auth';
 const SESSION_HOURS = parseInt(process.env.AUTH_SESSION_HOURS || '168', 10);
 
-// Conteúdo da tela de abertura - troque por env var sem tocar no código,
-// ou me mande a tela que você tem em mente que eu reescrevo o HTML/CSS
-// pra bater com ela.
+// Conteúdo da tela de abertura - troque por env var sem tocar no código.
 const PROJECT_TITLE = process.env.PROJECT_TITLE || 'Valleti Books & Rádio';
 const PROJECT_TAGLINE = process.env.PROJECT_TAGLINE || 'Painel administrativo';
 const PROJECT_DESCRIPTION = process.env.PROJECT_DESCRIPTION ||
@@ -56,11 +55,21 @@ function loadUsers() {
   try {
     const raw = fs.readFileSync(USERS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map((u) => ({ role: 'user', ...u })) : [];
   } catch (e) {
     console.error(`Não foi possível ler ${USERS_FILE}: ${e.message}`);
     return [];
   }
+}
+
+function saveUsers(users) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return { salt, hash };
 }
 
 function verifyPassword(password, salt, hash) {
@@ -74,6 +83,10 @@ function findUser(users, username) {
   return users.find((u) => u.username === username);
 }
 
+function isAdmin(user) {
+  return Boolean(user) && user.role === 'admin';
+}
+
 // O nome de usuário é codificado em base64url antes de entrar no token:
 // o alfabeto do base64url nunca contém ".", então usuários com ponto no
 // nome (ex: "luiz.primati") não quebram o split('.') abaixo.
@@ -84,19 +97,20 @@ function makeToken(username) {
   return Buffer.from(`${payload}.${sign(payload)}`).toString('base64url');
 }
 
-function verifyToken(token) {
+// Retorna o username validado do cookie, ou null. Reconfirma que o
+// usuário ainda existe no arquivo - permite revogar acesso na hora só
+// removendo a entrada, sem esperar o cookie expirar.
+function usernameFromToken(token) {
   try {
     const parts = Buffer.from(token, 'base64url').toString('utf8').split('.');
-    if (parts.length !== 3) return false;
+    if (parts.length !== 3) return null;
     const [encodedUser, expiresStr, sig] = parts;
-    if (Date.now() > parseInt(expiresStr, 10)) return false;
-    if (!safeEqual(sig, sign(`${encodedUser}.${expiresStr}`))) return false;
+    if (Date.now() > parseInt(expiresStr, 10)) return null;
+    if (!safeEqual(sig, sign(`${encodedUser}.${expiresStr}`))) return null;
     const username = Buffer.from(encodedUser, 'base64url').toString('utf8');
-    // Reconfirma que o usuário ainda existe no arquivo - permite revogar
-    // acesso na hora só removendo a entrada, sem esperar o cookie expirar.
-    return Boolean(findUser(loadUsers(), username));
+    return findUser(loadUsers(), username) ? username : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -110,106 +124,188 @@ function parseCookies(header) {
   return out;
 }
 
+function getSessionUser(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  const username = usernameFromToken(cookies[COOKIE_NAME]);
+  return username ? findUser(loadUsers(), username) : null;
+}
+
+// CSS compartilhado entre a tela de login e o painel de admin - variáveis
+// de tema (claro/escuro), alternadas via atributo data-theme na <html>.
+const THEME_CSS = `
+  :root {
+    --bg: #000; --bg-elevated: #0d0d0d; --bg-card: #111;
+    --border: #1e1e1e; --border-strong: #2e2e2e;
+    --text: #e4e4e7; --text-strong: #fff; --text-muted: #a1a1aa;
+    --accent: #3ecf8e; --accent-ink: #05261a; --accent-hover: #34b87c;
+    --danger-bg: #3a1d1d; --danger-border: #5c2b2b; --danger-text: #ff9b9b;
+    --shadow: rgba(0,0,0,.5);
+    color-scheme: dark;
+  }
+  [data-theme="light"] {
+    --bg: #fafafa; --bg-elevated: #fff; --bg-card: #fff;
+    --border: #e4e4e7; --border-strong: #d4d4d8;
+    --text: #27272a; --text-strong: #09090b; --text-muted: #6b7280;
+    --accent: #1f9d6f; --accent-ink: #fff; --accent-hover: #18845d;
+    --danger-bg: #fef2f2; --danger-border: #fecaca; --danger-text: #b91c1c;
+    --shadow: rgba(0,0,0,.1);
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--text); background: var(--bg); transition: background .15s, color .15s;
+  }
+  .topnav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 32px; border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; color: var(--text-strong); }
+  .brand svg { flex-shrink: 0; }
+  .navlinks { display: flex; gap: 28px; color: var(--text-muted); font-size: 14px; }
+  .navlinks span { cursor: default; }
+  @media (max-width: 800px) { .navlinks { display: none; } }
+  .nav-actions { display: flex; align-items: center; gap: 12px; }
+  .icon-btn {
+    width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-strong); border-radius: 8px; background: transparent;
+    color: var(--text); cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .icon-btn .icon-moon { display: none; }
+  [data-theme="light"] .icon-btn .icon-sun { display: none; }
+  [data-theme="light"] .icon-btn .icon-moon { display: block; }
+  .btn {
+    padding: 9px 20px; cursor: pointer; border: 1px solid var(--border-strong); border-radius: 6px;
+    background: transparent; color: var(--text); font-weight: 500; font-size: 14px;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary {
+    border: none; background: var(--accent); color: var(--accent-ink); font-weight: 600;
+  }
+  .btn-primary:hover { background: var(--accent-hover); color: var(--accent-ink); }
+  .btn-danger { border-color: var(--danger-border); color: var(--danger-text); }
+  .btn-danger:hover { border-color: var(--danger-text); }
+`;
+
+function themeInitScript() {
+  return `<script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>`;
+}
+
+function themeToggleMarkup() {
+  return `<button class="icon-btn" id="themeToggle" type="button" aria-label="Alternar tema claro/escuro">
+    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
+  </button>`;
+}
+
+function themeToggleScript() {
+  return `
+    var themeBtn = document.getElementById('themeToggle');
+    if (themeBtn) {
+      themeBtn.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem('theme', next); } catch (e) {}
+      });
+    }
+  `;
+}
+
 function renderPage({ error, redirect }) {
   const safeRedirect = (redirect || '/').replace(/"/g, '&quot;');
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+${themeInitScript()}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${PROJECT_TITLE}</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: #e4e4e7; background: #000;
-  }
-
-  /* --- Navegação --- */
-  .topnav {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 32px; border-bottom: 1px solid #1a1a1a;
-  }
-  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; color: #fff; }
-  .brand svg { flex-shrink: 0; }
-  .navlinks { display: flex; gap: 28px; color: #a1a1aa; font-size: 14px; }
-  .navlinks span { cursor: default; }
-  @media (max-width: 800px) { .navlinks { display: none; } }
-
-  .enter-btn {
-    padding: 9px 20px; cursor: pointer; border: 1px solid #2e2e2e; border-radius: 6px;
-    background: transparent; color: #e4e4e7; font-weight: 500; font-size: 14px;
-  }
-  .enter-btn:hover { border-color: #3ecf8e; color: #3ecf8e; }
-
-  /* --- Tela de abertura --- */
+${THEME_CSS}
   .landing {
     display: flex; flex-direction: column; align-items: flex-start;
     padding: 72px 32px 56px; max-width: 1100px; margin: 0 auto;
   }
   .landing h1 {
     font-size: clamp(32px, 5.5vw, 58px); line-height: 1.05; margin: 0 0 8px;
-    color: #fff; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--text-strong); font-weight: 700; letter-spacing: -0.02em;
   }
   .landing .tagline {
     font-size: clamp(32px, 5.5vw, 58px); line-height: 1.05; margin: 0 0 24px;
-    color: #3ecf8e; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--accent); font-weight: 700; letter-spacing: -0.02em;
   }
-  .landing p.desc { max-width: 560px; color: #a1a1aa; font-size: 17px; line-height: 1.6; margin: 0 0 32px; }
-
+  .landing p.desc { max-width: 560px; color: var(--text-muted); font-size: 17px; line-height: 1.6; margin: 0 0 32px; }
   .landing .cta {
     display: inline-block; padding: 12px 28px; border: none; border-radius: 8px;
-    background: #3ecf8e; color: #05261a; font-weight: 600; font-size: 15px; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 15px; cursor: pointer;
   }
-  .landing .cta:hover { background: #34b87c; }
+  .landing .cta:hover { background: var(--accent-hover); }
 
-  /* --- Cards de recursos --- */
   .features {
     max-width: 1100px; margin: 0 auto; padding: 0 32px 80px;
     display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
   }
-  .feature-card { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 12px; padding: 24px; }
-  .feature-card svg { color: #3ecf8e; margin-bottom: 16px; }
-  .feature-card h3 { font-size: 15px; color: #fff; margin: 0 0 8px; font-weight: 600; }
-  .feature-card p { font-size: 13px; color: #a1a1aa; line-height: 1.5; margin: 0; }
+  .feature-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .feature-card svg { color: var(--accent); margin-bottom: 16px; }
+  .feature-card h3 { font-size: 15px; color: var(--text-strong); margin: 0 0 8px; font-weight: 600; }
+  .feature-card p { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin: 0; }
 
   /* --- Login --- */
   .overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.75); display: none;
-    align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(2px);
+    position: fixed; inset: 0; background: rgba(0,0,0,.75); display: flex; opacity: 0; visibility: hidden;
+    align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(4px);
+    transition: opacity .18s ease;
   }
-  .overlay.open { display: flex; }
-  .card { width: 100%; max-width: 380px; position: relative; }
+  .overlay.open { opacity: 1; visibility: visible; }
+  .card {
+    width: 100%; max-width: 400px; position: relative; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 16px; padding: 40px 36px;
+    box-shadow: 0 20px 60px var(--shadow), 0 0 0 1px rgba(62,207,142,.06);
+    transform: scale(.96) translateY(8px); transition: transform .18s ease;
+  }
+  .overlay.open .card { transform: scale(1) translateY(0); }
+  .card::before {
+    content: ''; position: absolute; top: 0; left: 16px; right: 16px; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
   .card .close {
-    position: absolute; top: -36px; right: 0; background: none; border: none;
-    color: #71717a; font-size: 24px; cursor: pointer; line-height: 1;
+    position: absolute; top: 16px; right: 16px; background: none; border: none;
+    color: var(--text-muted); font-size: 22px; cursor: pointer; line-height: 1;
   }
-  .card .close:hover { color: #fff; }
-  .card h2 { font-size: 26px; margin: 0 0 6px; color: #fff; font-weight: 700; }
-  .card p.sub { margin: 0 0 28px; color: #a1a1aa; font-size: 14px; }
-  label { display: block; font-size: 13px; margin-bottom: 6px; color: #c4c4c4; }
+  .card .close:hover { color: var(--text-strong); }
+  .card-logo { color: var(--accent); margin-bottom: 20px; }
+  .card h2 { font-size: 24px; margin: 0 0 6px; color: var(--text-strong); font-weight: 700; }
+  .card p.sub { margin: 0 0 28px; color: var(--text-muted); font-size: 14px; }
+  label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text-muted); font-weight: 500; }
   .field { position: relative; margin-bottom: 18px; }
-  input {
-    width: 100%; padding: 11px 14px; border-radius: 8px;
-    border: 1px solid #2e2e2e; background: #111; color: #fff; font-size: 14px;
+  .field svg.leading {
+    position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;
   }
-  input:focus { outline: none; border-color: #3ecf8e; }
-  .field input { padding-right: 42px; }
+  input {
+    width: 100%; padding: 12px 14px; border-radius: 9px;
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text-strong); font-size: 14px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field input { padding-left: 40px; }
+  .field input.has-trailing { padding-right: 42px; }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(62,207,142,.15); }
   .toggle-eye {
     position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-    background: none; border: none; padding: 6px; cursor: pointer; color: #a1a1aa;
+    background: none; border: none; padding: 6px; cursor: pointer; color: var(--text-muted);
     display: flex; align-items: center;
   }
-  .toggle-eye:hover { color: #fff; }
+  .toggle-eye:hover { color: var(--text-strong); }
   button.submit {
-    width: 100%; padding: 12px; border: none; border-radius: 8px; background: #3ecf8e;
-    color: #05261a; font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 4px;
+    width: 100%; padding: 13px; border: none; border-radius: 9px; background: var(--accent);
+    color: var(--accent-ink); font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 8px;
+    transition: background .15s, transform .1s;
   }
-  button.submit:hover { background: #34b87c; }
+  button.submit:hover { background: var(--accent-hover); }
+  button.submit:active { transform: scale(.98); }
   .error {
-    background: #3a1d1d; border: 1px solid #5c2b2b; color: #ff9b9b;
+    background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text);
     padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
   }
 </style>
@@ -217,7 +313,7 @@ function renderPage({ error, redirect }) {
 <body>
   <nav class="topnav">
     <div class="brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="#3ecf8e"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--accent)"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
       <span>${PROJECT_TITLE}</span>
     </div>
     <div class="navlinks">
@@ -226,7 +322,10 @@ function renderPage({ error, redirect }) {
       <span>Soluções</span>
       <span>Documentação</span>
     </div>
-    <button class="enter-btn" id="enterBtn" type="button">Entrar</button>
+    <div class="nav-actions">
+      ${themeToggleMarkup()}
+      <button class="btn" id="enterBtn" type="button">Entrar</button>
+    </div>
   </nav>
 
   <div class="landing">
@@ -277,6 +376,7 @@ function renderPage({ error, redirect }) {
   <div class="overlay${error ? ' open' : ''}" id="overlay">
     <div class="card">
       <button class="close" id="closeBtn" type="button" aria-label="Fechar">&times;</button>
+      <svg class="card-logo" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
       <h2>Bem-vindo(a) de volta</h2>
       <p class="sub">Entre com suas credenciais de administrador.</p>
       ${error ? `<div class="error">${error}</div>` : ''}
@@ -284,11 +384,13 @@ function renderPage({ error, redirect }) {
         <input type="hidden" name="rd" value="${safeRedirect}">
         <label for="username">Usuário</label>
         <div class="field">
+          <svg class="leading" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
           <input type="text" id="username" name="username" autocomplete="username" required autofocus>
         </div>
         <label for="password">Senha</label>
         <div class="field">
-          <input type="password" id="password" name="password" autocomplete="current-password" required>
+          <svg class="leading" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          <input class="has-trailing" type="password" id="password" name="password" autocomplete="current-password" required>
           <button class="toggle-eye" id="toggleEye" type="button" aria-label="Mostrar senha">
             <svg id="eyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"></path>
@@ -302,6 +404,8 @@ function renderPage({ error, redirect }) {
   </div>
 
   <script>
+    ${themeToggleScript()}
+
     var overlay = document.getElementById('overlay');
     function openOverlay() { overlay.classList.add('open'); }
     document.getElementById('enterBtn').addEventListener('click', openOverlay);
@@ -324,6 +428,243 @@ function renderPage({ error, redirect }) {
 </html>`;
 }
 
+function renderForbiddenPage() {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+${themeInitScript()}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acesso restrito</title>
+<style>${THEME_CSS}
+  .wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+  h1 { color: var(--text-strong); font-size: 22px; }
+  p { color: var(--text-muted); max-width: 420px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Acesso restrito</h1>
+    <p>Essa área é só para administradores. Fale com quem administra este painel se precisar de acesso.</p>
+    <p><a href="/" style="color: var(--accent)">Voltar</a></p>
+  </div>
+</body>
+</html>`;
+}
+
+function renderAdminPage(currentUsername) {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+${themeInitScript()}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usuários - ${PROJECT_TITLE}</title>
+<style>
+${THEME_CSS}
+  .wrap { max-width: 780px; margin: 0 auto; padding: 40px 24px 80px; }
+  .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
+  .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
+  table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 12px 16px; font-size: 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .badge.admin { background: rgba(62,207,142,.15); color: var(--accent); }
+  .badge.user { background: var(--border); color: var(--text-muted); }
+  .row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .row-actions button {
+    border: 1px solid var(--border-strong); background: transparent; color: var(--text);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  .row-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  .row-actions button.danger:hover { border-color: var(--danger-text); color: var(--danger-text); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.75); display: none;
+    align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(4px);
+  }
+  .overlay.open { display: flex; }
+  .card {
+    width: 100%; max-width: 380px; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 32px; position: relative;
+  }
+  .card h2 { margin: 0 0 20px; font-size: 18px; color: var(--text-strong); }
+  label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text-muted); font-weight: 500; }
+  input, select {
+    width: 100%; padding: 10px 12px; margin-bottom: 16px; border-radius: 8px;
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text-strong); font-size: 14px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--text-muted); margin: -10px 0 16px; }
+  .card-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .card-actions button { flex: 1; padding: 11px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  .msg { font-size: 13px; margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; display: none; }
+  .msg.error { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); }
+  .msg.ok { background: rgba(62,207,142,.12); border: 1px solid rgba(62,207,142,.3); color: var(--accent); }
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--accent)"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
+      <span>${PROJECT_TITLE}</span>
+    </div>
+    <div class="nav-actions">
+      ${themeToggleMarkup()}
+      <a class="btn" href="/">Voltar ao Studio</a>
+      <a class="btn" href="/logout">Sair</a>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="toolbar">
+      <div>
+        <h1>Usuários</h1>
+        <p class="sub">Logado como <strong>${currentUsername}</strong></p>
+      </div>
+      <button class="btn btn-primary" id="newUserBtn" type="button">Novo usuário</button>
+    </div>
+    <table>
+      <thead><tr><th>Usuário</th><th>Papel</th><th></th></tr></thead>
+      <tbody id="usersBody"></tbody>
+    </table>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="card">
+      <h2 id="formTitle">Novo usuário</h2>
+      <div class="msg" id="formMsg"></div>
+      <form id="userForm">
+        <label for="f-username">Usuário</label>
+        <input type="text" id="f-username" required autocomplete="off">
+        <label for="f-password">Senha</label>
+        <input type="password" id="f-password" autocomplete="new-password">
+        <p class="hint" id="passwordHint">Mínimo 8 caracteres.</p>
+        <label for="f-role">Papel</label>
+        <select id="f-role">
+          <option value="user">Usuário</option>
+          <option value="admin">Administrador</option>
+        </select>
+        <div class="card-actions">
+          <button type="button" class="btn" id="cancelBtn">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="saveBtn">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    ${themeToggleScript()}
+
+    var overlay = document.getElementById('overlay');
+    var form = document.getElementById('userForm');
+    var usernameField = document.getElementById('f-username');
+    var passwordField = document.getElementById('f-password');
+    var passwordHint = document.getElementById('passwordHint');
+    var roleField = document.getElementById('f-role');
+    var formMsg = document.getElementById('formMsg');
+    var editingUsername = null;
+
+    function showMsg(text, kind) {
+      formMsg.textContent = text;
+      formMsg.className = 'msg ' + kind;
+      formMsg.style.display = 'block';
+    }
+    function hideMsg() { formMsg.style.display = 'none'; }
+
+    function openForm(user) {
+      hideMsg();
+      form.reset();
+      if (user) {
+        editingUsername = user.username;
+        document.getElementById('formTitle').textContent = 'Editar ' + user.username;
+        usernameField.value = user.username;
+        usernameField.disabled = true;
+        roleField.value = user.role;
+        passwordField.required = false;
+        passwordHint.textContent = 'Deixe em branco para manter a senha atual.';
+      } else {
+        editingUsername = null;
+        document.getElementById('formTitle').textContent = 'Novo usuário';
+        usernameField.disabled = false;
+        passwordField.required = true;
+        passwordHint.textContent = 'Mínimo 8 caracteres.';
+      }
+      overlay.classList.add('open');
+    }
+    function closeForm() { overlay.classList.remove('open'); }
+
+    document.getElementById('newUserBtn').addEventListener('click', function () { openForm(null); });
+    document.getElementById('cancelBtn').addEventListener('click', closeForm);
+
+    function loadUsers() {
+      fetch('/admin/api/users').then(function (r) { return r.json(); }).then(function (users) {
+        var body = document.getElementById('usersBody');
+        body.innerHTML = '';
+        users.forEach(function (u) {
+          var tr = document.createElement('tr');
+          var badgeClass = u.role === 'admin' ? 'admin' : 'user';
+          var badgeLabel = u.role === 'admin' ? 'Administrador' : 'Usuário';
+          tr.innerHTML =
+            '<td>' + u.username + '</td>' +
+            '<td><span class="badge ' + badgeClass + '">' + badgeLabel + '</span></td>' +
+            '<td><div class="row-actions">' +
+              '<button data-action="edit">Editar</button>' +
+              '<button data-action="delete" class="danger">Excluir</button>' +
+            '</div></td>';
+          tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openForm(u); });
+          tr.querySelector('[data-action="delete"]').addEventListener('click', function () {
+            if (!confirm('Excluir o usuário "' + u.username + '"? Essa ação não pode ser desfeita.')) return;
+            fetch('/admin/api/users/' + encodeURIComponent(u.username), { method: 'DELETE' })
+              .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+              .then(function (res) {
+                if (!res.ok) { alert(res.d.error || 'Não foi possível excluir.'); return; }
+                loadUsers();
+              });
+          });
+          body.appendChild(tr);
+        });
+      });
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      hideMsg();
+      var payload = { role: roleField.value };
+      if (passwordField.value) payload.password = passwordField.value;
+
+      var url = '/admin/api/users';
+      var method = 'POST';
+      if (editingUsername) {
+        url += '/' + encodeURIComponent(editingUsername);
+        method = 'PUT';
+      } else {
+        payload.username = usernameField.value;
+      }
+
+      fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { showMsg(res.d.error || 'Não foi possível salvar.', 'error'); return; }
+          closeForm();
+          loadUsers();
+        });
+    });
+
+    loadUsers();
+  </script>
+</body>
+</html>`;
+}
+
 function collectBody(req, callback) {
   let data = '';
   req.on('data', (chunk) => {
@@ -333,19 +674,19 @@ function collectBody(req, callback) {
   req.on('end', () => callback(data));
 }
 
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://internal');
 
   // Chamado pelo Nginx via auth_request - nunca exposto direto ao cliente.
   if (url.pathname === '/auth') {
     const cookies = parseCookies(req.headers.cookie);
-    if (cookies[COOKIE_NAME] && verifyToken(cookies[COOKIE_NAME])) {
-      res.writeHead(200);
-      res.end('ok');
-    } else {
-      res.writeHead(401);
-      res.end('unauthorized');
-    }
+    res.writeHead(usernameFromToken(cookies[COOKIE_NAME]) ? 200 : 401);
+    res.end();
     return;
   }
 
@@ -387,6 +728,98 @@ const server = http.createServer((req, res) => {
     });
     res.end();
     return;
+  }
+
+  // --- Painel de admin: CRUD de usuários, só para role === 'admin' ---
+
+  if (url.pathname === '/admin' && req.method === 'GET') {
+    const user = getSessionUser(req);
+    if (!user) {
+      res.writeHead(302, { Location: '/login?rd=%2Fadmin' });
+      res.end();
+      return;
+    }
+    if (!isAdmin(user)) {
+      res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(renderForbiddenPage());
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(renderAdminPage(user.username));
+    return;
+  }
+
+  if (url.pathname.startsWith('/admin/api/users')) {
+    const user = getSessionUser(req);
+    if (!isAdmin(user)) {
+      sendJson(res, user ? 403 : 401, { error: 'Acesso restrito a administradores.' });
+      return;
+    }
+
+    // GET /admin/api/users - lista (nunca inclui salt/hash)
+    if (url.pathname === '/admin/api/users' && req.method === 'GET') {
+      const users = loadUsers().map((u) => ({ username: u.username, role: u.role }));
+      sendJson(res, 200, users);
+      return;
+    }
+
+    // POST /admin/api/users - cria
+    if (url.pathname === '/admin/api/users' && req.method === 'POST') {
+      collectBody(req, (body) => {
+        let data;
+        try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+        const username = String(data.username || '').trim();
+        const password = String(data.password || '');
+        const role = data.role === 'admin' ? 'admin' : 'user';
+        if (!username) { sendJson(res, 400, { error: 'Informe um nome de usuário.' }); return; }
+        if (password.length < 8) { sendJson(res, 400, { error: 'A senha precisa ter ao menos 8 caracteres.' }); return; }
+        const users = loadUsers();
+        if (findUser(users, username)) { sendJson(res, 409, { error: 'Já existe um usuário com esse nome.' }); return; }
+        users.push({ username, role, ...hashPassword(password) });
+        saveUsers(users);
+        sendJson(res, 201, { username, role });
+      });
+      return;
+    }
+
+    // PUT/DELETE /admin/api/users/<username>
+    const prefix = '/admin/api/users/';
+    if (url.pathname.startsWith(prefix)) {
+      const targetUsername = decodeURIComponent(url.pathname.slice(prefix.length));
+      const users = loadUsers();
+      const target = findUser(users, targetUsername);
+      if (!target) { sendJson(res, 404, { error: 'Usuário não encontrado.' }); return; }
+
+      if (req.method === 'PUT') {
+        collectBody(req, (body) => {
+          let data;
+          try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+          if (typeof data.role === 'string') {
+            const isLastAdmin = target.role === 'admin' && data.role !== 'admin' &&
+              users.filter((u) => u.role === 'admin').length <= 1;
+            if (isLastAdmin) { sendJson(res, 400, { error: 'Não é possível remover o último administrador.' }); return; }
+            target.role = data.role === 'admin' ? 'admin' : 'user';
+          }
+          if (typeof data.password === 'string' && data.password) {
+            if (data.password.length < 8) { sendJson(res, 400, { error: 'A senha precisa ter ao menos 8 caracteres.' }); return; }
+            Object.assign(target, hashPassword(data.password));
+          }
+          saveUsers(users);
+          sendJson(res, 200, { username: target.username, role: target.role });
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        if (target.role === 'admin' && users.filter((u) => u.role === 'admin').length <= 1) {
+          sendJson(res, 400, { error: 'Não é possível excluir o último administrador.' });
+          return;
+        }
+        saveUsers(users.filter((u) => u.username !== targetUsername));
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+    }
   }
 
   res.writeHead(404);
