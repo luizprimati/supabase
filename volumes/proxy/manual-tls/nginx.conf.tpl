@@ -62,7 +62,11 @@ server {
     }
 
     location @login_redirect {
-        return 302 /login?rd=$request_uri;
+        # $http_host (não $host) preserva a porta não-padrão (9443) que o
+        # cliente usou - o Nginx completa redirects relativos com $host,
+        # que nunca inclui porta, e isso mandaria o navegador para a 443
+        # (do AzuraCast) em vez da 9443.
+        return 302 $scheme://$http_host/login?rd=$request_uri;
     }
 
     location /auth {
