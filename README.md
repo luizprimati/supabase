@@ -115,6 +115,37 @@ Studio.
 Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RADIO`
 (nenhuma porta dela foi alterada).
 
+Credenciais do Studio: `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` do `.env`
+(`sh run.sh secrets` **não** imprime o `DASHBOARD_USERNAME` — só o
+`DASHBOARD_PASSWORD` — confira o usuário com `grep DASHBOARD_USERNAME .env`).
+
+## Problemas conhecidos (troubleshooting)
+
+Encontrados e resolvidos durante o deploy inicial neste servidor — deixando
+registrado para não repetir o mesmo caminho:
+
+- **`supabase-pooler` reiniciando em loop com `hostname: Temporary failure
+  in name resolution`.** O Supavisor (Elixir/Erlang) tenta resolver o
+  próprio hostname via DNS ao iniciar o modo distribuído, e isso falha
+  nesse ambiente. Corrigido dando um `hostname` fixo ao container + uma
+  entrada em `extra_hosts` apontando pra `127.0.0.1` (já incluído em
+  `docker-compose.override.yml.example`).
+- **`supabase-pooler` falhando com `failed to bind host port
+  127.0.0.1:5432/tcp: address already in use`, mesmo sem nada ocupando a
+  porta** (`ss`/`lsof` vazios). Causa: o Compose **soma** listas de
+  `ports` entre arquivos por padrão, em vez de substituir — a porta
+  5432 acabava com duas tentativas de bind (a original em `0.0.0.0` do
+  `docker-compose.yml` base + a restrita em `127.0.0.1` do override), a
+  segunda falhava e o Docker desfazia a criação do container inteiro,
+  sem deixar rastro. Corrigido usando a tag `!override` (não `!reset`) na
+  lista de portas do `supavisor` em `docker-compose.override.yml` — ela
+  **substitui** a lista em vez de somar.
+- **Nunca rode `sudo systemctl restart docker` neste servidor sem saber o
+  que está fazendo.** Ele reinicia (não só "reconecta") todos os
+  containers, **incluindo o AzuraCast** — já causou uma queda real da
+  rádio durante esse processo. Prefira `docker restart <container>` ou
+  `sh run.sh restart <serviço>` para agir só no container específico.
+
 ## Segurança — não pule isto
 
 - **Nunca** libere 5432/6543 (Postgres/pooler) no Security List/NSG — o

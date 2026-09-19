@@ -16,9 +16,27 @@
 # padrão. Por isso é preciso adicioná-lo explicitamente com
 # "config add override" (equivale a colocar docker-compose.override.yml no
 # fim de COMPOSE_FILE) para ele ter efeito.
+#
+# "!override" (não "!reset") na lista de portas: o Compose por padrão
+# SOMA listas de "ports" entre arquivos, em vez de substituir. Sem
+# "!override", a porta 5432 acaba com duas tentativas de bind (a original
+# em 0.0.0.0 do docker-compose.yml, e esta em 127.0.0.1) - a segunda falha
+# com "address already in use" mesmo sem nada realmente ocupando a porta,
+# e o Docker desfaz a criação do container. "!reset" removeria o campo
+# inteiro (ficaria sem porta nenhuma publicada) - não serve aqui, porque
+# ainda queremos a porta publicada, só que restrita a 127.0.0.1.
+#
+# hostname/extra_hosts no supavisor: sem isso, o boot do Erlang/Elixir
+# tenta resolver o hostname do próprio container via DNS e falha
+# ("hostname: Temporary failure in name resolution"), travando o
+# container em loop de reinício. Dar um hostname fixo + uma entrada em
+# /etc/hosts apontando pra 127.0.0.1 resolve isso sem precisar de DNS.
 
 services:
   supavisor:
-    ports:
+    hostname: supavisor
+    extra_hosts:
+      - "supavisor:127.0.0.1"
+    ports: !override
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
       - "127.0.0.1:${POOLER_PROXY_PORT_TRANSACTION:-6543}:6543"
