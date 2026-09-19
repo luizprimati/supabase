@@ -66,12 +66,14 @@ SUPABASE_PUBLIC_URL=https://supabase.valletibooks.com.br:9443
 API_EXTERNAL_URL=https://supabase.valletibooks.com.br:9443/auth/v1
 SITE_URL=https://supabase.valletibooks.com.br:9443
 PROXY_DOMAIN=supabase.valletibooks.com.br
-DASHBOARD_USERNAME=escolha-um-usuario
-DASHBOARD_PASSWORD=troque-esta-senha
 SUPABASE_PROXY_PORT=9443
 ```
 
 `.env` está no `.gitignore` — nunca será commitado.
+
+> `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` (já vêm preenchidos pelo
+> `utils/generate-keys.sh`) não são mais usados pelo login do Studio nessa
+> configuração — o acesso é por usuário/senha próprios, veja o Passo 5.
 
 ## Passo 4 — Certificado HTTPS (manual, DNS-01)
 
@@ -79,10 +81,50 @@ Como 80/443 são do AzuraCast, o certificado não pode ser emitido
 automaticamente pelas vias padrão. Siga
 **[docs/certbot-manual-dns.md](docs/certbot-manual-dns.md)** — leva uns 2
 minutos, envolve colar um registro TXT no painel do Wix. Precisa ser feito
-antes do Passo 5 (o container do proxy não sobe saudável sem o certificado
+antes do Passo 6 (o container do proxy não sobe saudável sem o certificado
 já existir em `/etc/letsencrypt`).
 
-## Passo 5 — Subir a stack
+## Passo 5 — Criar os usuários do Studio
+
+O login do Studio é próprio (página de abertura + formulário, não é mais
+o pop-up de Basic Auth do navegador) e suporta **vários usuários**, cada
+um com sua própria senha — nenhuma senha fica em texto puro, só
+salt+hash (scrypt) em `volumes/proxy/manual-tls/users.json` (gitignored).
+
+```bash
+cp volumes/proxy/manual-tls/users.example.json volumes/proxy/manual-tls/users.json
+```
+
+Depois de subir a stack (Passo 6), gere o hash de cada senha:
+
+```bash
+docker exec -it supabase-studio-login node /app/hash-password.js "senha-da-pessoa"
+```
+
+Isso imprime `{"salt": "...", "hash": "..."}`. Edite
+`volumes/proxy/manual-tls/users.json` e adicione um objeto por pessoa:
+
+```json
+[
+  { "username": "luiz", "salt": "...", "hash": "..." },
+  { "username": "outra-pessoa", "salt": "...", "hash": "..." }
+]
+```
+
+Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
+login. Remova a entrada de exemplo (`"exemplo"`) depois de adicionar as
+suas.
+
+Para trocar o texto da tela de abertura (título, subtítulo, descrição),
+defina no `.env`:
+
+```dotenv
+PROJECT_TITLE=Valleti Books & Rádio
+PROJECT_TAGLINE=Painel administrativo
+PROJECT_DESCRIPTION=Área restrita à equipe autorizada.
+```
+
+## Passo 6 — Subir a stack
 
 ```bash
 cp docker-compose.override.yml.example docker-compose.override.yml
@@ -95,16 +137,16 @@ sh run.sh start
   do Passo 4), enquanto o gateway e o Studio do Supabase ficam só na rede
   interna do Docker — nada novo publicado em 80/443/8000-8999, nada do
   AzuraCast é tocado. Também sobe um container `login` (Node.js, sem
-  dependências) que serve uma tela de login própria para o Studio — o
-  Nginx valida a sessão via `auth_request` em vez de Basic Auth do
-  navegador. Código em `volumes/proxy/manual-tls/login-server.js`.
+  dependências) que serve a tela de abertura + login do Studio — o Nginx
+  valida a sessão via `auth_request` em vez de Basic Auth do navegador.
+  Código em `volumes/proxy/manual-tls/login-server.js`.
 - `override` restringe Postgres/pooler a `127.0.0.1` (nunca precisam ser
   públicos). Precisa ser adicionado explicitamente porque o `manual-tls`
   já deixa o `COMPOSE_FILE` explícito no `.env`, o que desliga o
   carregamento automático do `docker-compose.override.yml` pelo Docker
   Compose.
 
-## Passo 6 — Validar
+## Passo 7 — Validar
 
 ```bash
 sh run.sh status
@@ -112,15 +154,13 @@ curl -kI https://supabase.valletibooks.com.br:9443
 ```
 
 Abra `https://supabase.valletibooks.com.br:9443` no navegador — deve
-mostrar uma tela de login própria (formulário, não o pop-up nativo do
-navegador) pedindo usuário/senha, e depois abrir o Studio.
+mostrar a tela de abertura do projeto com um botão "Entrar" no canto; ao
+clicar, abre o formulário de usuário/senha (um dos cadastrados no Passo
+5), e depois abre o Studio.
 
 Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RADIO`
 (nenhuma porta dela foi alterada).
 
-Credenciais do Studio: `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` do `.env`
-(`sh run.sh secrets` **não** imprime o `DASHBOARD_USERNAME` — só o
-`DASHBOARD_PASSWORD` — confira o usuário com `grep DASHBOARD_USERNAME .env`).
 A sessão dura 7 dias (cookie); para sair antes disso, acesse
 `https://supabase.valletibooks.com.br:9443/logout`.
 
@@ -154,8 +194,9 @@ registrado para não repetir o mesmo caminho:
 ## Segurança — não pule isto
 
 - **Nunca** libere 5432/6543 (Postgres/pooler) no Security List/NSG — o
-  `docker-compose.override.yml` do Passo 5 já os restringe a `127.0.0.1`.
-- Troque `DASHBOARD_PASSWORD` para algo forte antes de expor publicamente.
+  `docker-compose.override.yml` do Passo 6 já os restringe a `127.0.0.1`.
+- Use senhas fortes em `volumes/proxy/manual-tls/users.json` (Passo 5) —
+  são elas que protegem o Studio agora, não mais `DASHBOARD_PASSWORD`.
 - Guarde uma cópia do `.env` em um cofre de senhas (1Password, Bitwarden) —
   se perder `JWT_SECRET`/`SERVICE_ROLE_KEY`, todos os tokens emitidos
   deixam de validar.

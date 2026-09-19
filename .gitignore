@@ -10,6 +10,7 @@ volumes/functions/main/**
 volumes/functions/hello/**
 !volumes/functions/hello/index.ts
 .env
+volumes/proxy/manual-tls/users.json
 test.http
 docker-compose.override.yml
 .supabase-version

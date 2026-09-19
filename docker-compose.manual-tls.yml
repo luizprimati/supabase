@@ -8,10 +8,12 @@
 # (SUPABASE_PROXY_PORT, padrão 9443) é exposta, então não há disputa de
 # porta com nada que já exista no servidor.
 #
-# O Studio fica atrás de uma tela de login própria (login-server.js),
-# validada pelo Nginx via "auth_request" - substitui o pop-up nativo de
-# Basic Auth do navegador por um formulário de verdade, com cookie de
-# sessão e /logout.
+# O Studio fica atrás de uma tela de abertura + login própria
+# (login-server.js), validada pelo Nginx via "auth_request" - substitui o
+# pop-up nativo de Basic Auth do navegador por uma página com botão
+# "Entrar" (revela um formulário), cookie de sessão, /logout, e suporte a
+# vários usuários (cada um com sua própria senha, ver
+# volumes/proxy/manual-tls/users.example.json).
 #
 # Uso:
 #   sh run.sh config add manual-tls
@@ -29,12 +31,13 @@ services:
     restart: unless-stopped
     command: ["node", "/app/login-server.js"]
     environment:
-      AUTH_USERNAME: ${DASHBOARD_USERNAME}
-      AUTH_PASSWORD: ${DASHBOARD_PASSWORD}
       # Reaproveita um segredo que já existe no .env (gerado pelo
       # utils/generate-keys.sh) em vez de introduzir uma variável nova só
       # para assinar o cookie de sessão.
       AUTH_COOKIE_SECRET: ${SECRET_KEY_BASE}
+      PROJECT_TITLE: ${PROJECT_TITLE:-}
+      PROJECT_TAGLINE: ${PROJECT_TAGLINE:-}
+      PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION:-}
       PORT: "8085"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8085/login"]
@@ -44,6 +47,11 @@ services:
       start_period: 5s
     volumes:
       - ./volumes/proxy/manual-tls/login-server.js:/app/login-server.js:ro
+      - ./volumes/proxy/manual-tls/hash-password.js:/app/hash-password.js:ro
+      # Usuários (usuário + salt + hash scrypt) - veja
+      # volumes/proxy/manual-tls/users.example.json para o formato. Nunca
+      # versionado (contém os hashes reais); crie a partir do .example.
+      - ./volumes/proxy/manual-tls/users.json:/app/users.json:ro
 
   nginx:
     container_name: supabase-nginx-manual
