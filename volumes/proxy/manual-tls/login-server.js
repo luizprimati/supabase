@@ -844,6 +844,7 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
+      <a class="btn btn-outline" href="/">Ir para Supabase</a>
       <a class="btn btn-outline" href="/login">Voltar</a>
       <a class="btn btn-outline" href="/logout">Sair</a>
     </div>
