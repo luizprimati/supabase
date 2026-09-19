@@ -118,51 +118,68 @@ function renderPage({ error, redirect }) {
   html, body { height: 100%; }
   body {
     margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: #e4e4e7; background: radial-gradient(circle at 50% 0%, #1f2a24 0%, #141414 60%);
+    color: #e4e4e7; background: #000;
   }
 
   /* --- Tela de abertura --- */
   .landing {
-    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; text-align: center; padding: 24px;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: flex-start;
+    justify-content: center; padding: 24px 64px; max-width: 900px;
   }
-  .landing h1 { font-size: 32px; margin: 0 0 12px; color: #fff; }
-  .landing .tagline { font-size: 16px; color: #3ecf8e; margin: 0 0 20px; font-weight: 600; }
-  .landing p.desc { max-width: 520px; color: #a1a1aa; font-size: 15px; line-height: 1.6; margin: 0; }
+  .landing h1 {
+    font-size: clamp(36px, 6vw, 64px); line-height: 1.05; margin: 0 0 8px;
+    color: #fff; font-weight: 700; letter-spacing: -0.02em;
+  }
+  .landing .tagline {
+    font-size: clamp(36px, 6vw, 64px); line-height: 1.05; margin: 0 0 24px;
+    color: #3ecf8e; font-weight: 700; letter-spacing: -0.02em;
+  }
+  .landing p.desc { max-width: 560px; color: #a1a1aa; font-size: 17px; line-height: 1.6; margin: 0 0 32px; }
+
+  .landing .cta {
+    display: inline-block; padding: 12px 28px; border: none; border-radius: 8px;
+    background: #3ecf8e; color: #05261a; font-weight: 600; font-size: 15px; cursor: pointer;
+  }
+  .landing .cta:hover { background: #34b87c; }
 
   .enter-btn {
-    position: fixed; top: 20px; right: 24px; padding: 10px 20px; border: none;
-    border-radius: 999px; background: #3ecf8e; color: #05261a; font-weight: 600;
-    font-size: 14px; cursor: pointer; box-shadow: 0 4px 14px rgba(62,207,142,.35);
+    position: fixed; top: 24px; right: 32px; padding: 9px 20px; cursor: pointer;
+    border: 1px solid #2e2e2e; border-radius: 6px; background: transparent;
+    color: #e4e4e7; font-weight: 500; font-size: 14px;
   }
-  .enter-btn:hover { background: #34b87c; }
+  .enter-btn:hover { border-color: #3ecf8e; color: #3ecf8e; }
 
-  /* --- Modal de login --- */
+  /* --- Login --- */
   .overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
-    align-items: center; justify-content: center; padding: 16px;
+    position: fixed; inset: 0; background: rgba(0,0,0,.75); display: none;
+    align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(2px);
   }
   .overlay.open { display: flex; }
-  .card {
-    width: 100%; max-width: 360px; padding: 32px; border-radius: 12px;
-    background: #242424; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,.4);
-    position: relative;
-  }
+  .card { width: 100%; max-width: 380px; position: relative; }
   .card .close {
-    position: absolute; top: 12px; right: 14px; background: none; border: none;
-    color: #9a9a9a; font-size: 18px; cursor: pointer; line-height: 1;
+    position: absolute; top: -36px; right: 0; background: none; border: none;
+    color: #71717a; font-size: 24px; cursor: pointer; line-height: 1;
   }
-  .card h2 { font-size: 18px; margin: 0 0 4px; color: #fff; }
-  .card p.sub { margin: 0 0 20px; color: #9a9a9a; font-size: 13px; }
+  .card .close:hover { color: #fff; }
+  .card h2 { font-size: 26px; margin: 0 0 6px; color: #fff; font-weight: 700; }
+  .card p.sub { margin: 0 0 28px; color: #a1a1aa; font-size: 14px; }
   label { display: block; font-size: 13px; margin-bottom: 6px; color: #c4c4c4; }
+  .field { position: relative; margin-bottom: 18px; }
   input {
-    width: 100%; padding: 10px 12px; margin-bottom: 16px; border-radius: 8px;
-    border: 1px solid #3a3a3a; background: #1a1a1a; color: #fff; font-size: 14px;
+    width: 100%; padding: 11px 14px; border-radius: 8px;
+    border: 1px solid #2e2e2e; background: #111; color: #fff; font-size: 14px;
   }
   input:focus { outline: none; border-color: #3ecf8e; }
+  .field input { padding-right: 42px; }
+  .toggle-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; padding: 6px; cursor: pointer; color: #a1a1aa;
+    display: flex; align-items: center;
+  }
+  .toggle-eye:hover { color: #fff; }
   button.submit {
-    width: 100%; padding: 11px; border: none; border-radius: 8px; background: #3ecf8e;
-    color: #05261a; font-weight: 600; font-size: 14px; cursor: pointer;
+    width: 100%; padding: 12px; border: none; border-radius: 8px; background: #3ecf8e;
+    color: #05261a; font-weight: 600; font-size: 14px; cursor: pointer; margin-top: 4px;
   }
   button.submit:hover { background: #34b87c; }
   .error {
@@ -178,20 +195,31 @@ function renderPage({ error, redirect }) {
     <h1>${PROJECT_TITLE}</h1>
     <p class="tagline">${PROJECT_TAGLINE}</p>
     <p class="desc">${PROJECT_DESCRIPTION}</p>
+    <button class="cta" id="ctaBtn" type="button">Acessar o painel</button>
   </div>
 
   <div class="overlay${error ? ' open' : ''}" id="overlay">
     <div class="card">
       <button class="close" id="closeBtn" type="button" aria-label="Fechar">&times;</button>
-      <h2>Entrar</h2>
-      <p class="sub">Use suas credenciais de administrador.</p>
+      <h2>Bem-vindo(a) de volta</h2>
+      <p class="sub">Entre com suas credenciais de administrador.</p>
       ${error ? `<div class="error">${error}</div>` : ''}
       <form method="POST" action="/login">
         <input type="hidden" name="rd" value="${safeRedirect}">
         <label for="username">Usuário</label>
-        <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+        <div class="field">
+          <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+        </div>
         <label for="password">Senha</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required>
+        <div class="field">
+          <input type="password" id="password" name="password" autocomplete="current-password" required>
+          <button class="toggle-eye" id="toggleEye" type="button" aria-label="Mostrar senha">
+            <svg id="eyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
         <button class="submit" type="submit">Entrar</button>
       </form>
     </div>
@@ -199,11 +227,21 @@ function renderPage({ error, redirect }) {
 
   <script>
     var overlay = document.getElementById('overlay');
-    document.getElementById('enterBtn').addEventListener('click', function () {
-      overlay.classList.add('open');
-    });
+    function openOverlay() { overlay.classList.add('open'); }
+    document.getElementById('enterBtn').addEventListener('click', openOverlay);
+    document.getElementById('ctaBtn').addEventListener('click', openOverlay);
     document.getElementById('closeBtn').addEventListener('click', function () {
       overlay.classList.remove('open');
+    });
+
+    var pwd = document.getElementById('password');
+    var eyeIcon = document.getElementById('eyeIcon');
+    var EYE_OPEN = eyeIcon.innerHTML;
+    var EYE_OFF = '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.6 21.6 0 0 1 5.06-6.06M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a21.6 21.6 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
+    document.getElementById('toggleEye').addEventListener('click', function () {
+      var showing = pwd.type === 'text';
+      pwd.type = showing ? 'password' : 'text';
+      eyeIcon.innerHTML = showing ? EYE_OPEN : EYE_OFF;
     });
   </script>
 </body>
