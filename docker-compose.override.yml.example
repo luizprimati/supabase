@@ -1,0 +1,33 @@
+# Exemplo de override de segurança para uso em produção (Oracle Cloud).
+#
+# Por padrão o docker-compose.yml publica algumas portas em 0.0.0.0 (todas as
+# interfaces), o que as deixa acessíveis pela internet caso o firewall da
+# instância/VCN não bloqueie. Este override reduz a publicação para
+# 127.0.0.1, já que o acesso externo deve passar sempre pelo proxy reverso
+# (Caddy/Nginx) na 80/443.
+#
+# Como usar:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   # docker-compose.override.yml já está no .gitignore (não é versionado)
+#   docker compose up -d
+#
+# O docker compose carrega docker-compose.override.yml automaticamente,
+# sem precisar listá-lo em COMPOSE_FILE.
+
+services:
+  # Gateway (Envoy ou Kong) - se você usa Caddy/Nginx com "config add caddy"
+  # ou "config add nginx", o próprio override deles já remove essa porta
+  # publicada (ports: !reset []). Mantenha o bloco abaixo só se estiver
+  # rodando SEM esses overrides (ex: acesso via túnel SSH para testes).
+  api-gw:
+    ports:
+      - "127.0.0.1:${API_GW_HTTP_PORT:-8000}:8000/tcp"
+
+  # Supavisor (pooler) publica Postgres (5432) e o modo transaction (6543).
+  # Normalmente nenhum motivo para expor isso à internet: se a rádio ou
+  # outra aplicação no MESMO servidor precisar conectar no Postgres, o
+  # 127.0.0.1 já resolve, sem precisar abrir porta nenhuma no firewall.
+  supavisor:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POOLER_PROXY_PORT_TRANSACTION:-6543}:6543"
