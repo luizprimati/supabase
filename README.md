@@ -148,16 +148,6 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   comuns veem o botão mas recebem erro ao
   clicar, já que a API por trás é restrita a admin).
 
-  O Studio (essa versão) também tem uma aba **Edge Functions** na barra
-  lateral, mas ela é **só leitura** por decisão da própria Supabase no
-  self-hosted (não existe botão de criar/editar por lá -
-  [supabase/supabase#40543](https://github.com/supabase/supabase/issues/40543)) -
-  ela lista o que já existe em `volumes/functions`, mas quem cria/edita
-  de verdade é este painel em `/admin`. Depois de criar/editar uma
-  função aqui, ela aparece na aba do Studio ao clicar em "Refresh" (ou
-  recarregar a página) - se não aparecer, veja
-  [Problemas conhecidos](#problemas-conhecidos-troubleshooting).
-
 Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
