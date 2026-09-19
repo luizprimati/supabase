@@ -94,7 +94,10 @@ sh run.sh start
 - `manual-tls` ativa um Nginx próprio na porta 9443 (usando o certificado
   do Passo 4), enquanto o gateway e o Studio do Supabase ficam só na rede
   interna do Docker — nada novo publicado em 80/443/8000-8999, nada do
-  AzuraCast é tocado.
+  AzuraCast é tocado. Também sobe um container `login` (Node.js, sem
+  dependências) que serve uma tela de login própria para o Studio — o
+  Nginx valida a sessão via `auth_request` em vez de Basic Auth do
+  navegador. Código em `volumes/proxy/manual-tls/login-server.js`.
 - `override` restringe Postgres/pooler a `127.0.0.1` (nunca precisam ser
   públicos). Precisa ser adicionado explicitamente porque o `manual-tls`
   já deixa o `COMPOSE_FILE` explícito no `.env`, o que desliga o
@@ -108,9 +111,9 @@ sh run.sh status
 curl -kI https://supabase.valletibooks.com.br:9443
 ```
 
-Abra `https://supabase.valletibooks.com.br:9443` no navegador — deve pedir
-o usuário/senha do `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` e abrir o
-Studio.
+Abra `https://supabase.valletibooks.com.br:9443` no navegador — deve
+mostrar uma tela de login própria (formulário, não o pop-up nativo do
+navegador) pedindo usuário/senha, e depois abrir o Studio.
 
 Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RADIO`
 (nenhuma porta dela foi alterada).
@@ -118,6 +121,8 @@ Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RA
 Credenciais do Studio: `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` do `.env`
 (`sh run.sh secrets` **não** imprime o `DASHBOARD_USERNAME` — só o
 `DASHBOARD_PASSWORD` — confira o usuário com `grep DASHBOARD_USERNAME .env`).
+A sessão dura 7 dias (cookie); para sair antes disso, acesse
+`https://supabase.valletibooks.com.br:9443/logout`.
 
 ## Problemas conhecidos (troubleshooting)
 

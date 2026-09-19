@@ -8,6 +8,11 @@
 # (SUPABASE_PROXY_PORT, padrão 9443) é exposta, então não há disputa de
 # porta com nada que já exista no servidor.
 #
+# O Studio fica atrás de uma tela de login própria (login-server.js),
+# validada pelo Nginx via "auth_request" - substitui o pop-up nativo de
+# Basic Auth do navegador por um formulário de verdade, com cookie de
+# sessão e /logout.
+#
 # Uso:
 #   sh run.sh config add manual-tls
 #   sh run.sh start
@@ -17,6 +22,28 @@ services:
   # pela rede interna do compose, através do container "nginx" abaixo.
   api-gw:
     ports: !reset []
+
+  login:
+    container_name: supabase-studio-login
+    image: node:20-alpine
+    restart: unless-stopped
+    command: ["node", "/app/login-server.js"]
+    environment:
+      AUTH_USERNAME: ${DASHBOARD_USERNAME}
+      AUTH_PASSWORD: ${DASHBOARD_PASSWORD}
+      # Reaproveita um segredo que já existe no .env (gerado pelo
+      # utils/generate-keys.sh) em vez de introduzir uma variável nova só
+      # para assinar o cookie de sessão.
+      AUTH_COOKIE_SECRET: ${SECRET_KEY_BASE}
+      PORT: "8085"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8085/login"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - ./volumes/proxy/manual-tls/login-server.js:/app/login-server.js:ro
 
   nginx:
     container_name: supabase-nginx-manual
@@ -29,17 +56,15 @@ services:
         condition: service_healthy
       studio:
         condition: service_healthy
+      login:
+        condition: service_healthy
     environment:
       PROXY_DOMAIN: ${PROXY_DOMAIN}
-      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
     entrypoint:
       - /bin/sh
       - -c
       - |
         set -e
-        apk add --no-cache openssl >/dev/null
-        printf '%s:%s\n' "$$DASHBOARD_USERNAME" "$$(openssl passwd -apr1 "$$DASHBOARD_PASSWORD")" > /etc/nginx/dashboard-passwd
         envsubst '$$PROXY_DOMAIN' < /etc/nginx/templates/nginx.conf.tpl > /etc/nginx/conf.d/default.conf
         exec nginx -g 'daemon off;'
     volumes:

@@ -37,10 +37,32 @@ server {
     proxy_buffers 4 256k;
     proxy_busy_buffers_size 256k;
 
+    # Tela de login própria (login-server.js) no lugar do pop-up nativo de
+    # Basic Auth do navegador. /internal-auth é uma sub-requisição interna
+    # que só valida o cookie de sessão - nunca é chamada direto pelo cliente.
+    location = /internal-auth {
+        internal;
+        proxy_pass http://login:8085/auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+    }
+
+    location /login {
+        proxy_pass http://login:8085;
+    }
+
+    location /logout {
+        proxy_pass http://login:8085;
+    }
+
     location / {
-        auth_basic "supabase";
-        auth_basic_user_file /etc/nginx/dashboard-passwd;
+        auth_request /internal-auth;
+        error_page 401 = @login_redirect;
         proxy_pass http://studio:3000;
+    }
+
+    location @login_redirect {
+        return 302 /login?rd=$request_uri;
     }
 
     location /auth {
