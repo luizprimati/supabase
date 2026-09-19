@@ -141,9 +141,10 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   a posição via JavaScript, recalculada continuamente, então funciona
   mesmo navegando pela SPA sem recarregar a página, e sobrevive a
   resize/scroll - fica fora da árvore que o React controla, senão o
-  próprio React apagava o botão no re-render seguinte). Ele só pede o nome,
-  grava um template mínimo (mesma API do `/admin`) e recarrega a
-  página - o código de verdade você edita no editor nativo do Studio
+  próprio React apagava o botão no re-render seguinte). Ao clicar, abre
+  um modal próprio (não é o `prompt()` nativo do navegador) pedindo só
+  o nome - grava um template mínimo (mesma API do `/admin`) e recarrega
+  a página; o código de verdade você edita no editor nativo do Studio
   (bem melhor que o do `/admin`). Só admins conseguem usar (usuários
   comuns veem o botão mas recebem erro ao
   clicar, já que a API por trás é restrita a admin).
