@@ -324,6 +324,7 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
+      <a class="btn" href="/admin">Gerenciar usuários</a>
       <button class="btn" id="enterBtn" type="button">Entrar</button>
     </div>
   </nav>
