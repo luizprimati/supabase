@@ -236,9 +236,6 @@ const THEME_CSS = `
   }
   .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; color: var(--text-strong); }
   .brand svg { flex-shrink: 0; }
-  .navlinks { display: flex; gap: 28px; color: var(--text-muted); font-size: 14px; }
-  .navlinks span { cursor: default; }
-  @media (max-width: 800px) { .navlinks { display: none; } }
   .nav-actions { display: flex; align-items: center; gap: 12px; }
   .icon-btn {
     width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
@@ -252,6 +249,7 @@ const THEME_CSS = `
   .btn {
     padding: 9px 20px; cursor: pointer; border: 1px solid var(--border-strong); border-radius: 6px;
     background: transparent; color: var(--text); font-weight: 500; font-size: 14px;
+    text-decoration: none; display: inline-block; line-height: 1.4;
   }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn-primary {
@@ -260,6 +258,10 @@ const THEME_CSS = `
   .btn-primary:hover { background: var(--accent-hover); color: var(--accent-ink); }
   .btn-danger { border-color: var(--danger-border); color: var(--danger-text); }
   .btn-danger:hover { border-color: var(--danger-text); }
+  /* Variante para ações secundárias de navegação (Voltar/Sair) - borda e
+     texto na cor de destaque em vez do cinza neutro do .btn puro. */
+  .btn-outline { border-color: var(--accent); color: var(--accent); }
+  .btn-outline:hover { background: var(--accent); color: var(--accent-ink); }
 `;
 
 function themeInitScript() {
@@ -396,16 +398,10 @@ ${THEME_CSS}
       <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--accent)"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
       <span>${PROJECT_TITLE}</span>
     </div>
-    <div class="navlinks">
-      <span>Produto</span>
-      <span>Desenvolvedores</span>
-      <span>Soluções</span>
-      <span>Documentação</span>
-    </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
       ${loggedIn
-        ? `<a class="btn" href="/logout">Sair</a>`
+        ? `<a class="btn btn-outline" href="/logout">Sair</a>`
         : `<button class="btn" id="enterBtn" type="button">Entrar</button>`}
     </div>
   </nav>
@@ -416,7 +412,7 @@ ${THEME_CSS}
     <p class="desc">${PROJECT_DESCRIPTION}</p>
     ${loggedIn
       ? `<div class="actions">
-          <a class="cta" href="/admin">Gerenciar usuários</a>
+          <a class="cta" href="/admin">Painel Admin</a>
           <a class="cta secondary" href="/">Ir para o Supabase</a>
         </div>`
       : `<button class="cta" id="ctaBtn" type="button">Acessar o painel</button>`}
@@ -634,8 +630,8 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
-      <a class="btn" href="/login">Voltar</a>
-      <a class="btn" href="/logout">Sair</a>
+      <a class="btn btn-outline" href="/login">Voltar</a>
+      <a class="btn btn-outline" href="/logout">Sair</a>
     </div>
   </nav>
 
