@@ -113,10 +113,19 @@ Isso imprime `{"salt": "...", "hash": "..."}`. Edite
 
 `"role"` é `"admin"` ou `"user"` (padrão se omitido). **Pelo menos um
 usuário precisa ser `"admin"`** — é ele quem consegue acessar
-`https://SEU_DOMINIO:9443/admin`, uma telinha de CRUD para cadastrar,
-editar (senha/papel) e excluir os demais usuários direto pelo navegador,
-sem precisar mexer em `users.json` ou rodar `hash-password.js` de novo.
-Quem é `"user"` não vê essa tela (dá 403).
+`https://SEU_DOMINIO:9443/admin`, um painel com duas abas:
+
+- **Usuários** — CRUD para cadastrar, editar (senha/papel) e excluir os
+  demais usuários direto pelo navegador, sem precisar mexer em
+  `users.json` ou rodar `hash-password.js` de novo.
+- **Edge Functions** — editor de código (com realce de sintaxe) para criar,
+  editar e excluir Edge Functions direto pelo navegador. Grava direto em
+  `volumes/functions/<nome>/index.ts`, a mesma pasta que o container
+  `functions` já lê a cada requisição — **sem precisar reiniciar nada**.
+  Cada função criada fica disponível em `/functions/v1/<nome>` (a URL
+  aparece no próprio editor).
+
+Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
 login. Remova a entrada de exemplo (`"exemplo"`) depois de adicionar as

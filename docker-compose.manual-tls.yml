@@ -38,6 +38,7 @@ services:
       PROJECT_TITLE: ${PROJECT_TITLE:-}
       PROJECT_TAGLINE: ${PROJECT_TAGLINE:-}
       PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION:-}
+      FUNCTIONS_DIR: /app/functions
       PORT: "8085"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8085/login"]
@@ -53,6 +54,11 @@ services:
       # versionado (contém os hashes reais); crie a partir do .example.
       # Gravável (sem ":ro") - o CRUD em /admin escreve neste arquivo.
       - ./volumes/proxy/manual-tls/users.json:/app/users.json
+      # Mesma pasta que o container "functions" (edge-runtime) serve -
+      # gravável, para o editor de Edge Functions em /admin escrever
+      # direto nos arquivos que o dispatcher (volumes/functions/main) já
+      # lê do disco a cada requisição (sem precisar reiniciar nada).
+      - ./volumes/functions:/app/functions
 
   nginx:
     container_name: supabase-nginx-manual

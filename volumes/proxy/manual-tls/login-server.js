@@ -19,12 +19,14 @@
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const querystring = require('querystring');
 const { URL } = require('url');
 
 const PORT = process.env.PORT || 8085;
 const COOKIE_SECRET = process.env.AUTH_COOKIE_SECRET || '';
 const USERS_FILE = process.env.USERS_FILE || '/app/users.json';
+const FUNCTIONS_DIR = process.env.FUNCTIONS_DIR || '/app/functions';
 const COOKIE_NAME = 'supabase_studio_auth';
 const SESSION_HOURS = parseInt(process.env.AUTH_SESSION_HOURS || '168', 10);
 
@@ -78,6 +80,63 @@ function trySaveUsers(res, users) {
     sendJson(res, 500, { error: 'Não foi possível salvar - o arquivo users.json está gravável no container?' });
     return false;
   }
+}
+
+// --- Edge Functions: editor simples que escreve direto nos arquivos que
+// o dispatcher (volumes/functions/main/index.ts) já lê do disco a cada
+// requisição - editar aqui tem efeito imediato, sem reiniciar container.
+
+const FUNCTION_NAME_RE = /^[a-z][a-z0-9_-]{0,62}$/;
+const RESERVED_FUNCTION_NAMES = new Set(['main']); // dispatcher - nunca editável por aqui
+
+const FUNCTION_TEMPLATE = `import "@supabase/functions-js/edge-runtime.d.ts"
+
+Deno.serve(async (req: Request) => {
+  return Response.json({ message: "Hello from Edge Functions!" });
+});
+`;
+
+function isValidFunctionName(name) {
+  return FUNCTION_NAME_RE.test(name) && !RESERVED_FUNCTION_NAMES.has(name);
+}
+
+function functionIndexPath(name) {
+  return path.join(FUNCTIONS_DIR, name, 'index.ts');
+}
+
+function listFunctions() {
+  try {
+    return fs.readdirSync(FUNCTIONS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !RESERVED_FUNCTION_NAMES.has(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (e) {
+    console.error(`Não foi possível listar ${FUNCTIONS_DIR}: ${e.message}`);
+    return [];
+  }
+}
+
+function readFunctionCode(name) {
+  try {
+    return fs.readFileSync(functionIndexPath(name), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// Grava via arquivo temporário + rename (atômico no mesmo filesystem) -
+// evita o dispatcher ler um arquivo pela metade no meio de uma escrita.
+function writeFunctionCode(name, code) {
+  const dir = path.join(FUNCTIONS_DIR, name);
+  fs.mkdirSync(dir, { recursive: true });
+  const finalPath = path.join(dir, 'index.ts');
+  const tmpPath = `${finalPath}.tmp`;
+  fs.writeFileSync(tmpPath, code);
+  fs.renameSync(tmpPath, finalPath);
+}
+
+function deleteFunctionDir(name) {
+  fs.rmSync(path.join(FUNCTIONS_DIR, name), { recursive: true, force: true });
 }
 
 function hashPassword(password) {
@@ -490,10 +549,26 @@ function renderAdminPage(currentUsername) {
 ${themeInitScript()}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Usuários - ${PROJECT_TITLE}</title>
+<title>Admin - ${PROJECT_TITLE}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
 <style>
 ${THEME_CSS}
-  .wrap { max-width: 780px; margin: 0 auto; padding: 40px 24px 80px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 80px; }
+  .tabs { display: flex; gap: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    padding: 10px 2px; background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--text-muted); font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .tab-btn.active { color: var(--text-strong); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .editor-card { max-width: 760px; }
+  .fn-url { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text-muted); word-break: break-all; }
+  .CodeMirror { height: 380px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+  textarea#fn-code { width: 100%; height: 380px; margin-bottom: 16px; }
   .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
   .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
   table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -552,17 +627,38 @@ ${THEME_CSS}
   </nav>
 
   <div class="wrap">
-    <div class="toolbar">
-      <div>
-        <h1>Usuários</h1>
-        <p class="sub">Logado como <strong>${currentUsername}</strong></p>
-      </div>
-      <button class="btn btn-primary" id="newUserBtn" type="button">Novo usuário</button>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="users" type="button">Usuários</button>
+      <button class="tab-btn" data-tab="functions" type="button">Edge Functions</button>
     </div>
-    <table>
-      <thead><tr><th>Usuário</th><th>Papel</th><th></th></tr></thead>
-      <tbody id="usersBody"></tbody>
-    </table>
+
+    <div class="tab-panel active" id="usersPanel">
+      <div class="toolbar">
+        <div>
+          <h1>Usuários</h1>
+          <p class="sub">Logado como <strong>${currentUsername}</strong></p>
+        </div>
+        <button class="btn btn-primary" id="newUserBtn" type="button">Novo usuário</button>
+      </div>
+      <table>
+        <thead><tr><th>Usuário</th><th>Papel</th><th></th></tr></thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+
+    <div class="tab-panel" id="functionsPanel">
+      <div class="toolbar">
+        <div>
+          <h1>Edge Functions</h1>
+          <p class="sub">Salvar aqui grava direto no servidor - sem precisar reiniciar nada.</p>
+        </div>
+        <button class="btn btn-primary" id="newFnBtn" type="button">Nova função</button>
+      </div>
+      <table>
+        <thead><tr><th>Nome</th><th>URL</th><th></th></tr></thead>
+        <tbody id="functionsBody"></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="overlay" id="overlay">
@@ -585,6 +681,24 @@ ${THEME_CSS}
           <button type="submit" class="btn btn-primary" id="saveBtn">Salvar</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div class="overlay" id="fnOverlay">
+    <div class="card editor-card">
+      <h2 id="fnFormTitle">Nova função</h2>
+      <div class="msg" id="fnFormMsg"></div>
+      <label for="fn-name">Nome da função</label>
+      <input type="text" id="fn-name" autocomplete="off" placeholder="ex: minha-funcao">
+      <p class="hint" id="fnNameHint">Letras minúsculas, números, "-" ou "_", começando com letra. Não pode ser alterado depois de criada.</p>
+      <label for="fn-code">Código (index.ts)</label>
+      <textarea id="fn-code"></textarea>
+      <p class="fn-url" id="fnUrlHint"></p>
+      <div class="card-actions">
+        <button type="button" class="btn" id="fnCancelBtn">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="fnDeleteBtn" style="display:none">Excluir</button>
+        <button type="button" class="btn btn-primary" id="fnSaveBtn">Salvar</button>
+      </div>
     </div>
   </div>
 
@@ -691,6 +805,135 @@ ${THEME_CSS}
     });
 
     loadUsers();
+
+    // --- Abas ---
+    var tabButtons = document.querySelectorAll('.tab-btn');
+    var tabPanels = { users: document.getElementById('usersPanel'), functions: document.getElementById('functionsPanel') };
+    var functionsLoaded = false;
+    tabButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        tabButtons.forEach(function (b) { b.classList.remove('active'); });
+        Object.keys(tabPanels).forEach(function (k) { tabPanels[k].classList.remove('active'); });
+        btn.classList.add('active');
+        tabPanels[btn.dataset.tab].classList.add('active');
+        if (btn.dataset.tab === 'functions' && !functionsLoaded) {
+          functionsLoaded = true;
+          loadFunctions();
+        }
+      });
+    });
+
+    // --- Edge Functions ---
+    var fnOverlay = document.getElementById('fnOverlay');
+    var fnNameField = document.getElementById('fn-name');
+    var fnCodeArea = document.getElementById('fn-code');
+    var fnFormMsg = document.getElementById('fnFormMsg');
+    var fnUrlHint = document.getElementById('fnUrlHint');
+    var fnDeleteBtn = document.getElementById('fnDeleteBtn');
+    var editingFunctionName = null;
+    var fnEditor = null;
+    var FUNCTION_TEMPLATE = ${JSON.stringify(FUNCTION_TEMPLATE)};
+
+    function ensureEditor() {
+      if (fnEditor) return fnEditor;
+      if (window.CodeMirror) {
+        fnEditor = CodeMirror.fromTextArea(fnCodeArea, {
+          mode: 'text/typescript', theme: 'dracula', lineNumbers: true, tabSize: 2, indentUnit: 2,
+        });
+      }
+      return fnEditor;
+    }
+    function getCode() { return fnEditor ? fnEditor.getValue() : fnCodeArea.value; }
+    function setCode(v) { if (fnEditor) { fnEditor.setValue(v); } else { fnCodeArea.value = v; } }
+
+    function fnShowMsg(text, kind) {
+      fnFormMsg.textContent = text;
+      fnFormMsg.className = 'msg ' + kind;
+      fnFormMsg.style.display = 'block';
+    }
+    function fnHideMsg() { fnFormMsg.style.display = 'none'; }
+
+    function openFunctionEditor(name) {
+      fnHideMsg();
+      ensureEditor();
+      editingFunctionName = name;
+      if (name) {
+        document.getElementById('fnFormTitle').textContent = 'Editar ' + name;
+        fnNameField.value = name;
+        fnNameField.disabled = true;
+        fnDeleteBtn.style.display = '';
+        fnUrlHint.textContent = window.location.origin + '/functions/v1/' + name;
+        setCode('');
+        fetch('/admin/api/functions/' + encodeURIComponent(name)).then(function (r) { return r.json(); }).then(function (d) {
+          setCode(d.code || '');
+        });
+      } else {
+        document.getElementById('fnFormTitle').textContent = 'Nova função';
+        fnNameField.value = '';
+        fnNameField.disabled = false;
+        fnDeleteBtn.style.display = 'none';
+        fnUrlHint.textContent = '';
+        setCode(FUNCTION_TEMPLATE);
+      }
+      fnOverlay.classList.add('open');
+      if (fnEditor) setTimeout(function () { fnEditor.refresh(); }, 10);
+    }
+    function closeFunctionEditor() { fnOverlay.classList.remove('open'); }
+
+    document.getElementById('newFnBtn').addEventListener('click', function () { openFunctionEditor(null); });
+    document.getElementById('fnCancelBtn').addEventListener('click', closeFunctionEditor);
+
+    fnNameField.addEventListener('input', function () {
+      if (!fnNameField.disabled) {
+        fnUrlHint.textContent = fnNameField.value ? window.location.origin + '/functions/v1/' + fnNameField.value : '';
+      }
+    });
+
+    document.getElementById('fnSaveBtn').addEventListener('click', function () {
+      fnHideMsg();
+      var name = (editingFunctionName || fnNameField.value.trim());
+      if (!name) { fnShowMsg('Informe um nome para a função.', 'error'); return; }
+      fetch('/admin/api/functions/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: getCode() }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { fnShowMsg(res.d.error || 'Não foi possível salvar.', 'error'); return; }
+          closeFunctionEditor();
+          loadFunctions();
+        });
+    });
+
+    fnDeleteBtn.addEventListener('click', function () {
+      if (!editingFunctionName) return;
+      if (!confirm('Excluir a função "' + editingFunctionName + '"? Essa ação não pode ser desfeita.')) return;
+      fetch('/admin/api/functions/' + encodeURIComponent(editingFunctionName), { method: 'DELETE' })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { alert(res.d.error || 'Não foi possível excluir.'); return; }
+          closeFunctionEditor();
+          loadFunctions();
+        });
+    });
+
+    function loadFunctions() {
+      fetch('/admin/api/functions').then(function (r) { return r.json(); }).then(function (names) {
+        var body = document.getElementById('functionsBody');
+        body.innerHTML = '';
+        names.forEach(function (name) {
+          var tr = document.createElement('tr');
+          var fnUrl = window.location.origin + '/functions/v1/' + name;
+          tr.innerHTML =
+            '<td>' + name + '</td>' +
+            '<td class="fn-url">' + fnUrl + '</td>' +
+            '<td><div class="row-actions"><button data-action="edit">Editar</button></div></td>';
+          tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openFunctionEditor(name); });
+          body.appendChild(tr);
+        });
+      });
+    }
   </script>
 </body>
 </html>`;
@@ -879,6 +1122,67 @@ function handleRequest(req, res) {
           return;
         }
         if (!trySaveUsers(res, users.filter((u) => u.username !== targetUsername))) return;
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+    }
+  }
+
+  // --- Edge Functions: editor, também restrito a role === 'admin' ---
+  if (url.pathname.startsWith('/admin/api/functions')) {
+    const user = getSessionUser(req);
+    if (!isAdmin(user)) {
+      sendJson(res, user ? 403 : 401, { error: 'Acesso restrito a administradores.' });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/functions' && req.method === 'GET') {
+      sendJson(res, 200, listFunctions());
+      return;
+    }
+
+    const fnPrefix = '/admin/api/functions/';
+    if (url.pathname.startsWith(fnPrefix)) {
+      const name = decodeURIComponent(url.pathname.slice(fnPrefix.length));
+
+      if (req.method === 'GET') {
+        if (!isValidFunctionName(name)) { sendJson(res, 400, { error: 'Nome de função inválido.' }); return; }
+        const code = readFunctionCode(name);
+        if (code === null) { sendJson(res, 404, { error: 'Função não encontrada.' }); return; }
+        sendJson(res, 200, { name, code });
+        return;
+      }
+
+      if (req.method === 'PUT') {
+        collectBody(req, (body) => {
+          let data;
+          try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+          if (!isValidFunctionName(name)) {
+            sendJson(res, 400, { error: 'Nome inválido. Use letras minúsculas, números, "-" ou "_", começando com letra.' });
+            return;
+          }
+          const code = typeof data.code === 'string' ? data.code : '';
+          if (!code.trim()) { sendJson(res, 400, { error: 'O código não pode ficar vazio.' }); return; }
+          try {
+            writeFunctionCode(name, code);
+          } catch (e) {
+            console.error(`Não foi possível gravar a função ${name}: ${e.message}`);
+            sendJson(res, 500, { error: 'Não foi possível salvar - a pasta de functions está gravável no container?' });
+            return;
+          }
+          sendJson(res, 200, { name });
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        if (!isValidFunctionName(name)) { sendJson(res, 400, { error: 'Nome de função inválido.' }); return; }
+        try {
+          deleteFunctionDir(name);
+        } catch (e) {
+          sendJson(res, 500, { error: `Não foi possível excluir: ${e.message}` });
+          return;
+        }
         sendJson(res, 200, { ok: true });
         return;
       }
