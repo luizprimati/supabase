@@ -153,20 +153,24 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   usar (usuários comuns veem o botão mas recebem erro ao clicar, já
   que a API por trás é restrita a admin).
 
-  Editar o código de uma função existente também funciona **direto no
-  editor do Studio**, apesar dele vir só-leitura no self-hosted: o
-  `studio-inject.js` acessa a instância do Monaco (o editor por trás,
-  exposta como `window.monaco` pelo próprio Studio) e destrava a
-  escrita, além de acrescentar um botão flutuante **"Salvar"** que
-  grava o conteúdo atual do editor via `/admin/api/functions/<nome>` -
-  a mesma API usada em tudo isso. Como o self-hosted não tem rota de
-  "deploy" própria (não existe `POST .../functions/deploy` nessa
-  versão), sem esse botão não haveria como salvar mesmo com o editor
-  destravado. Isso depende de `window.monaco` continuar exposto
-  globalmente pelo Studio (é assim que a versão atual carrega o
-  editor) - se uma atualização futura do Studio mudar isso, o botão
-  simplesmente não aparece (o editor pode continuar só-leitura, mas
-  nada quebra).
+  Pra editar o código de uma função existente, o `studio-inject.js`
+  acrescenta um botão flutuante **"Editar no painel admin"** em toda
+  página de uma função no Studio (`/project/default/functions/<nome>`,
+  Code ou Settings). Ele leva pra `/admin?editFunction=<nome>`, que já
+  abre a aba Edge Functions com o editor daquela função pronto (código
+  carregado, Salvar/Excluir). **Chegamos a tentar destravar o editor
+  Monaco do próprio Studio direto** (ele expõe `window.monaco`
+  globalmente, e dá pra achar a instância via
+  `monaco.editor.getEditors()` e chamar `updateOptions({readOnly:
+  false})`) - mas o self-hosted não é só-leitura só pela opção do
+  Monaco: o React deles reverte qualquer edição de volta pro texto
+  original a cada mudança (cursor pulando pro início a cada tecla,
+  "salvar" gravando o texto de antes por engano) e o roteador deles
+  ainda mostra um aviso de "unsaved changes" ao sair - camadas de
+  proteção deliberadas, não um efeito colateral só do `readOnly`.
+  Continuar tentando contornar cada uma ia ficar cada vez mais frágil
+  pra um ganho cada vez menor, por isso desistimos disso e ficamos só
+  com o atalho pro editor do `/admin`, que já é robusto.
 
 Quem é `"user"` não vê esse painel (dá 403).
 

@@ -944,6 +944,15 @@ ${THEME_CSS}
         });
       });
     }
+
+    // Atalho vindo do botão injetado na página da função no Studio
+    // (?editFunction=<nome>) - já abre direto na aba certa com o editor.
+    var deepLinkFn = new URLSearchParams(window.location.search).get('editFunction');
+    if (deepLinkFn) {
+      var functionsTabBtn = document.querySelector('.tab-btn[data-tab="functions"]');
+      if (functionsTabBtn) functionsTabBtn.click();
+      openFunctionEditor(deepLinkFn);
+    }
   </script>
 </body>
 </html>`;
@@ -1296,12 +1305,16 @@ const STUDIO_INJECT_JS = `(function () {
   }
 
   // Editor de código de uma função existente: o Studio abre o Monaco em
-  // modo só-leitura (o self-hosted não tem rota de "deploy" pra salvar de
-  // verdade - por isso desligaram a escrita). Aqui a gente destrava o
-  // Monaco direto pela API dele (window.monaco, exposta globalmente pelo
-  // carregador AMD que o Studio usa) e adiciona um botão próprio de
-  // "Salvar" que grava via /admin/api/functions, a mesma API que o resto
-  // deste arquivo já usa.
+  // modo só-leitura, e não é só a opção "readOnly" - o React deles reverte
+  // qualquer edição de volta pro texto original a cada mudança (é uma
+  // segunda camada de proteção, de propósito, para reforçar que o
+  // self-hosted é mesmo só-leitura). Desbloquear só o Monaco não é
+  // suficiente e produz um comportamento quebrado (cursor pulando pro
+  // início a cada tecla, "salvar" gravando o texto original de volta em
+  // vez do editado, aviso de "unsaved changes" do próprio roteador deles).
+  // Em vez de tentar contornar cada camada (cada vez mais frágil), este
+  // botão só leva direto pro editor de verdade em /admin, que já
+  // funciona.
   function getFunctionNameFromPath() {
     var parts = window.location.pathname.split('/').filter(Boolean);
     var idx = parts.indexOf('functions');
@@ -1311,110 +1324,41 @@ const STUDIO_INJECT_JS = `(function () {
     return name;
   }
 
-  function getMonacoEditors() {
-    if (!window.monaco || !window.monaco.editor) return [];
-    try { return window.monaco.editor.getEditors(); } catch (e) { return []; }
-  }
-
-  var saveBtn = null;
-  var saveStatus = null;
-  function ensureCodeEditorSave() {
+  var editLink = null;
+  function ensureEditDeepLink() {
     var name = getFunctionNameFromPath();
-    var editors = getMonacoEditors();
-    var shouldShow = !!name && editors.length > 0;
-
-    if (!shouldShow) {
-      if (saveBtn) { saveBtn.remove(); saveBtn = null; }
-      if (saveStatus) { saveStatus.remove(); saveStatus = null; }
+    if (!name) {
+      if (editLink) { editLink.remove(); editLink = null; }
       return;
     }
+    if (editLink) return;
 
-    // Reforça a cada tick: se o React re-renderizar o editor, ele volta a
-    // aplicar readOnly=true (é a prop que vem do componente) e isso desfaz
-    // o destravamento.
-    editors.forEach(function (ed) {
-      try { ed.updateOptions({ readOnly: false }); } catch (e) {}
-    });
-
-    if (saveBtn) return;
-
-    saveStatus = document.createElement('div');
-    saveStatus.id = '__save_fn_status';
-    saveStatus.style.position = 'fixed';
-    saveStatus.style.bottom = '58px';
-    saveStatus.style.right = '20px';
-    saveStatus.style.zIndex = '999999';
-    saveStatus.style.fontSize = '12px';
-    saveStatus.style.fontFamily = 'inherit';
-    saveStatus.style.padding = '6px 10px';
-    saveStatus.style.borderRadius = '6px';
-    saveStatus.style.display = 'none';
-
-    saveBtn = document.createElement('button');
-    saveBtn.id = '__save_fn_btn';
-    saveBtn.type = 'button';
-    saveBtn.textContent = 'Salvar';
-    saveBtn.style.position = 'fixed';
-    saveBtn.style.bottom = '20px';
-    saveBtn.style.right = '20px';
-    saveBtn.style.zIndex = '999999';
-    saveBtn.style.border = 'none';
-    saveBtn.style.borderRadius = '6px';
-    saveBtn.style.background = '#3ecf8e';
-    saveBtn.style.color = '#05261a';
-    saveBtn.style.fontWeight = '600';
-    saveBtn.style.fontSize = '13px';
-    saveBtn.style.fontFamily = 'inherit';
-    saveBtn.style.padding = '8px 18px';
-    saveBtn.style.cursor = 'pointer';
-    saveBtn.style.boxShadow = '0 2px 10px rgba(0,0,0,.3)';
-
-    saveBtn.addEventListener('click', function () {
-      var currentName = getFunctionNameFromPath();
-      var eds = getMonacoEditors();
-      if (!currentName || !eds.length) return;
-      var code = eds[0].getValue();
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Salvando...';
-      fetch('/admin/api/functions/' + encodeURIComponent(currentName), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code }),
-      })
-        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-        .then(function (res) {
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Salvar';
-          saveStatus.style.display = 'block';
-          if (!res.ok) {
-            saveStatus.style.background = '#fdecea';
-            saveStatus.style.color = '#c0392b';
-            saveStatus.textContent = res.d && res.d.error ? res.d.error : 'Não foi possível salvar.';
-          } else {
-            saveStatus.style.background = 'rgba(62,207,142,.15)';
-            saveStatus.style.color = '#1f9d6f';
-            saveStatus.textContent = 'Salvo!';
-            setTimeout(function () { saveStatus.style.display = 'none'; }, 2500);
-          }
-        })
-        .catch(function () {
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Salvar';
-          saveStatus.style.display = 'block';
-          saveStatus.style.background = '#fdecea';
-          saveStatus.style.color = '#c0392b';
-          saveStatus.textContent = 'Erro de rede ao salvar.';
-        });
-    });
-
-    document.body.appendChild(saveStatus);
-    document.body.appendChild(saveBtn);
+    editLink = document.createElement('a');
+    editLink.id = '__edit_admin_link';
+    editLink.href = '/admin?editFunction=' + encodeURIComponent(name);
+    editLink.textContent = 'Editar no painel admin';
+    editLink.style.position = 'fixed';
+    editLink.style.bottom = '20px';
+    editLink.style.right = '20px';
+    editLink.style.zIndex = '999999';
+    editLink.style.border = 'none';
+    editLink.style.borderRadius = '6px';
+    editLink.style.background = '#3ecf8e';
+    editLink.style.color = '#05261a';
+    editLink.style.fontWeight = '600';
+    editLink.style.fontSize = '13px';
+    editLink.style.fontFamily = 'inherit';
+    editLink.style.padding = '8px 18px';
+    editLink.style.cursor = 'pointer';
+    editLink.style.textDecoration = 'none';
+    editLink.style.boxShadow = '0 2px 10px rgba(0,0,0,.3)';
+    document.body.appendChild(editLink);
   }
 
   function ensureAll() {
     ensureLogoutButton();
     ensureFnBtn();
-    ensureCodeEditorSave();
+    ensureEditDeepLink();
   }
 
   setInterval(ensureAll, 600);
