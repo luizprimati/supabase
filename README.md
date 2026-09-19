@@ -198,6 +198,17 @@ A sessão dura 7 dias (cookie); para sair antes disso, acesse
 Encontrados e resolvidos durante o deploy inicial neste servidor — deixando
 registrado para não repetir o mesmo caminho:
 
+- **Funções criadas em `/admin` não aparecem em lugar nenhum (nem na aba
+  Edge Functions do Studio, nem sobrevivem a um `docker compose down`).**
+  `sh run.sh restart <serviço>` só reinicia o processo - ele **não** aplica
+  uma lista de `volumes:` nova que você tenha adicionado ao compose. Se o
+  container `login` já existia de antes da pasta `./volumes/functions` ter
+  sido montada nele, ele continua sem esse mount até ser recriado - e
+  qualquer função criada pelo painel vai parar só na camada gravável do
+  próprio container (nunca chega no disco), então some ao recriar e nunca
+  aparece no Studio (que sim, olha o diretório real do host). Sempre que
+  mudar `volumes:`/`environment:` de um serviço no compose, use
+  `sh run.sh recreate <serviço>` (não `restart`).
 - **`supabase-pooler` reiniciando em loop com `hostname: Temporary failure
   in name resolution`.** O Supavisor (Elixir/Erlang) tenta resolver o
   próprio hostname via DNS ao iniciar o modo distribuído, e isso falha
