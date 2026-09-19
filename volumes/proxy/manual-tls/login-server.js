@@ -981,8 +981,8 @@ ${THEME_CSS}
             '<td>' + u.username + '</td>' +
             '<td><span class="badge ' + badgeClass + '">' + badgeLabel + '</span></td>' +
             '<td><div class="row-actions">' +
-              '<button data-action="edit">Editar</button>' +
-              '<button data-action="delete" class="danger">Excluir</button>' +
+              '<button data-action="edit" class="icon-only" title="Editar" aria-label="Editar">' + PENCIL_ICON + '</button>' +
+              '<button data-action="delete" class="icon-only danger" title="Excluir" aria-label="Excluir">' + TRASH_ICON + '</button>' +
             '</div></td>';
           tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openForm(u); });
           tr.querySelector('[data-action="delete"]').addEventListener('click', function () {
