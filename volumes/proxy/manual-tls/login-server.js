@@ -127,17 +127,34 @@ function renderPage({ error, redirect }) {
     color: #e4e4e7; background: #000;
   }
 
+  /* --- Navegação --- */
+  .topnav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 32px; border-bottom: 1px solid #1a1a1a;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; color: #fff; }
+  .brand svg { flex-shrink: 0; }
+  .navlinks { display: flex; gap: 28px; color: #a1a1aa; font-size: 14px; }
+  .navlinks span { cursor: default; }
+  @media (max-width: 800px) { .navlinks { display: none; } }
+
+  .enter-btn {
+    padding: 9px 20px; cursor: pointer; border: 1px solid #2e2e2e; border-radius: 6px;
+    background: transparent; color: #e4e4e7; font-weight: 500; font-size: 14px;
+  }
+  .enter-btn:hover { border-color: #3ecf8e; color: #3ecf8e; }
+
   /* --- Tela de abertura --- */
   .landing {
-    min-height: 100vh; display: flex; flex-direction: column; align-items: flex-start;
-    justify-content: center; padding: 24px 64px; max-width: 900px;
+    display: flex; flex-direction: column; align-items: flex-start;
+    padding: 72px 32px 56px; max-width: 1100px; margin: 0 auto;
   }
   .landing h1 {
-    font-size: clamp(36px, 6vw, 64px); line-height: 1.05; margin: 0 0 8px;
+    font-size: clamp(32px, 5.5vw, 58px); line-height: 1.05; margin: 0 0 8px;
     color: #fff; font-weight: 700; letter-spacing: -0.02em;
   }
   .landing .tagline {
-    font-size: clamp(36px, 6vw, 64px); line-height: 1.05; margin: 0 0 24px;
+    font-size: clamp(32px, 5.5vw, 58px); line-height: 1.05; margin: 0 0 24px;
     color: #3ecf8e; font-weight: 700; letter-spacing: -0.02em;
   }
   .landing p.desc { max-width: 560px; color: #a1a1aa; font-size: 17px; line-height: 1.6; margin: 0 0 32px; }
@@ -148,12 +165,15 @@ function renderPage({ error, redirect }) {
   }
   .landing .cta:hover { background: #34b87c; }
 
-  .enter-btn {
-    position: fixed; top: 24px; right: 32px; padding: 9px 20px; cursor: pointer;
-    border: 1px solid #2e2e2e; border-radius: 6px; background: transparent;
-    color: #e4e4e7; font-weight: 500; font-size: 14px;
+  /* --- Cards de recursos --- */
+  .features {
+    max-width: 1100px; margin: 0 auto; padding: 0 32px 80px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
   }
-  .enter-btn:hover { border-color: #3ecf8e; color: #3ecf8e; }
+  .feature-card { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 12px; padding: 24px; }
+  .feature-card svg { color: #3ecf8e; margin-bottom: 16px; }
+  .feature-card h3 { font-size: 15px; color: #fff; margin: 0 0 8px; font-weight: 600; }
+  .feature-card p { font-size: 13px; color: #a1a1aa; line-height: 1.5; margin: 0; }
 
   /* --- Login --- */
   .overlay {
@@ -195,13 +215,63 @@ function renderPage({ error, redirect }) {
 </style>
 </head>
 <body>
-  <button class="enter-btn" id="enterBtn" type="button">Entrar</button>
+  <nav class="topnav">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="#3ecf8e"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-6Z"></path></svg>
+      <span>${PROJECT_TITLE}</span>
+    </div>
+    <div class="navlinks">
+      <span>Produto</span>
+      <span>Desenvolvedores</span>
+      <span>Soluções</span>
+      <span>Documentação</span>
+    </div>
+    <button class="enter-btn" id="enterBtn" type="button">Entrar</button>
+  </nav>
 
   <div class="landing">
     <h1>${PROJECT_TITLE}</h1>
     <p class="tagline">${PROJECT_TAGLINE}</p>
     <p class="desc">${PROJECT_DESCRIPTION}</p>
     <button class="cta" id="ctaBtn" type="button">Acessar o painel</button>
+  </div>
+
+  <div class="features">
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+      <h3>Banco de dados Postgres</h3>
+      <p>Cada projeto é um banco Postgres completo, o banco relacional mais confiável do mundo.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path></svg>
+      <h3>Autenticação</h3>
+      <p>Cadastro e login de usuários, protegendo os dados com Row Level Security.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+      <h3>Funções Edge</h3>
+      <p>Escreva código customizado sem se preocupar em implantar ou escalar servidores.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"></path><path d="M1 3h22v5H1z"></path><path d="M10 12h4"></path></svg>
+      <h3>Armazenamento</h3>
+      <p>Guarde, organize e sirva arquivos grandes, de vídeos a imagens.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+      <h3>Tempo real</h3>
+      <p>Construa experiências com sincronização de dados em tempo real.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.27 6.96 8.73 5.04 8.73-5.04"></path><path d="M12 22.08V12"></path></svg>
+      <h3>Vetor</h3>
+      <p>Integre modelos de ML para guardar, indexar e buscar embeddings vetoriais.</p>
+    </div>
+    <div class="feature-card">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+      <h3>APIs de dados</h3>
+      <p>APIs REST prontas para uso, geradas automaticamente a partir do seu banco.</p>
+    </div>
   </div>
 
   <div class="overlay${error ? ' open' : ''}" id="overlay">
