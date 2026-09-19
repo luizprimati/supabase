@@ -61,22 +61,32 @@ server {
         proxy_pass http://login:8085;
     }
 
+    # JS injetado em toda página do Studio (botão de logout, botão/modal
+    # de "Nova função" em Edge Functions) - servido daqui em vez de
+    # embutido direto na diretiva sub_filter abaixo, porque essa diretiva
+    # tem um limite de ~4KB por parâmetro (já estourou uma vez - ver
+    # STUDIO_INJECT_JS em login-server.js).
+    location = /studio-inject.js {
+        proxy_pass http://login:8085;
+    }
+
     location / {
         auth_request /internal-auth;
         error_page 401 = @login_redirect;
         proxy_pass http://studio:3000;
 
         # O Studio (imagem oficial) não sabe nada sobre o nosso login/sessão
-        # por fora, então não tem botão de sair. Injeta um botão flutuante
-        # de "Sair" em toda página HTML dele via sub_filter - fica fora da
-        # <div id="__next"> do Next.js, então sobrevive à navegação
-        # client-side da SPA (só a carga inicial de cada rota reinjeta).
-        # Accept-Encoding vazio força o Studio a responder sem compressão -
-        # sub_filter não reescreve corpo gzip/br.
+        # por fora, então não tem botão de sair (nem editor de Edge
+        # Functions no self-hosted). sub_filter injeta só uma tag <script
+        # src> curta (o conteúdo de verdade é /studio-inject.js, acima) -
+        # fica fora da <div id="__next"> do Next.js, então sobrevive à
+        # navegação client-side da SPA (só a carga inicial de cada rota
+        # reinjeta). Accept-Encoding vazio força o Studio a responder sem
+        # compressão - sub_filter não reescreve corpo gzip/br.
         proxy_set_header Accept-Encoding "";
         sub_filter_types text/html;
         sub_filter_once on;
-        sub_filter '</body>' '<style>#__logout_fab{position:fixed;bottom:20px;right:20px;z-index:999999;width:32px;height:32px;border-radius:50%;background:#3ecf8e;color:#05261a;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3);text-decoration:none;opacity:.7;transition:opacity .15s,transform .15s}#__logout_fab:hover{opacity:1;background:#34b87c;transform:scale(1.08)}</style><a id="__logout_fab" href="/logout" title="Sair"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></a><script>(function(){function isValidFnName(n){if(!n)return false;if(n.length>63)return false;if(n==="main")return false;var c0=n.charCodeAt(0);if(c0<97||c0>122)return false;for(var i=0;i<n.length;i++){var c=n.charCodeAt(i);var ok=(c>=97&&c<=122)||(c>=48&&c<=57)||c===45||c===95;if(!ok)return false;}return true;}function createFnBtn(){var btn=document.createElement("button");btn.id="__new_fn_btn";btn.type="button";var svgNS="http://www.w3.org/2000/svg";var svg=document.createElementNS(svgNS,"svg");svg.setAttribute("width","13");svg.setAttribute("height","13");svg.setAttribute("viewBox","0 0 24 24");svg.setAttribute("fill","none");svg.setAttribute("stroke","currentColor");svg.setAttribute("stroke-width","2.5");svg.setAttribute("stroke-linecap","round");svg.setAttribute("stroke-linejoin","round");var l1=document.createElementNS(svgNS,"line");l1.setAttribute("x1","12");l1.setAttribute("y1","5");l1.setAttribute("x2","12");l1.setAttribute("y2","19");var l2=document.createElementNS(svgNS,"line");l2.setAttribute("x1","5");l2.setAttribute("y1","12");l2.setAttribute("x2","19");l2.setAttribute("y2","12");svg.appendChild(l1);svg.appendChild(l2);var lbl=document.createElement("span");lbl.textContent="Nova função";btn.appendChild(svg);btn.appendChild(lbl);btn.style.position="fixed";btn.style.zIndex="999999";btn.style.border="none";btn.style.borderRadius="6px";btn.style.background="#3ecf8e";btn.style.color="#05261a";btn.style.fontWeight="600";btn.style.fontSize="12px";btn.style.fontFamily="inherit";btn.style.cursor="pointer";btn.style.boxSizing="border-box";btn.style.height="26px";btn.style.lineHeight="1";btn.style.padding="0 10px";btn.style.display="inline-flex";btn.style.alignItems="center";btn.style.gap="6px";btn.style.justifyContent="center";btn.addEventListener("click",function(){var name=window.prompt("Nome da nova função (letras minúsculas, números, - ou _, começando com letra):");if(!name)return;name=name.trim();if(!isValidFnName(name)){window.alert("Nome inválido.");return;}var code=`Deno.serve(() => Response.json({ message: "Hello from Edge Functions!" }));`;fetch("/admin/api/functions/"+encodeURIComponent(name),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:code})}).then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});}).then(function(res){if(!res.ok){window.alert(res.d&&res.d.error?res.d.error:"Não foi possível criar a função.");return;}window.location.reload();}).catch(function(){window.alert("Erro de rede ao criar a função.");});});document.body.appendChild(btn);return btn;}function ensureFnBtn(){var existing=document.getElementById("__new_fn_btn");if(window.location.pathname.indexOf("/functions")===-1){if(existing)existing.remove();return;}var els=document.querySelectorAll("a,button");var examplesBtn=null;for(var i=0;i<els.length;i++){if(els[i].id!=="__new_fn_btn"&&els[i].textContent.trim()==="Examples"){examplesBtn=els[i];break;}}if(!examplesBtn){if(existing)existing.remove();return;}var btn=existing||createFnBtn();var group=examplesBtn.parentElement||examplesBtn;var groupRect=group.getBoundingClientRect();var w=btn.offsetWidth||140;btn.style.top=groupRect.top+"px";btn.style.left=Math.max(8,groupRect.left-w-8)+"px";}setInterval(ensureFnBtn,600);ensureFnBtn();})();</script></body>';
+        sub_filter '</body>' '<script src="/studio-inject.js"></script></body>';
     }
 
     location @login_redirect {

@@ -141,10 +141,16 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   a posição via JavaScript, recalculada continuamente, então funciona
   mesmo navegando pela SPA sem recarregar a página, e sobrevive a
   resize/scroll - fica fora da árvore que o React controla, senão o
-  próprio React apagava o botão no re-render seguinte). Ele só pede o nome,
-  grava um template mínimo (mesma API do `/admin`) e recarrega a
+  próprio React apagava o botão no re-render seguinte). Ao clicar, abre
+  um modal próprio (não o `prompt()` nativo do navegador) pedindo só o
+  nome, grava um template mínimo (mesma API do `/admin`) e recarrega a
   página - o código de verdade você edita no editor nativo do Studio
-  (bem melhor que o do `/admin`). Só admins conseguem usar (usuários
+  (bem melhor que o do `/admin`). Esse botão/modal é servido como
+  arquivo em `/studio-inject.js` (ver `STUDIO_INJECT_JS` em
+  `login-server.js`), não embutido direto no `nginx.conf.tpl` - veja
+  [Problemas conhecidos](#problemas-conhecidos-troubleshooting) sobre
+  o limite de tamanho do Nginx que motivou isso. Só admins conseguem
+  usar (usuários
   comuns veem o botão mas recebem erro ao
   clicar, já que a API por trás é restrita a admin).
 
@@ -247,6 +253,23 @@ registrado para não repetir o mesmo caminho:
   como delimitador - aí a aspa dupla interna não precisa de escape
   nenhum. A checagem confiável aqui é `grep -o '\\"' arquivo | wc -l`
   no valor do `sub_filter` - se não for zero, tem risco.
+- **Nginx recusa subir com `too long parameter, probably missing
+  terminating "'" character` mesmo com aspas/escapes corretos.** O
+  Nginx tem um limite de ~4KB por parâmetro de configuração - um
+  `sub_filter` com HTML/JS demais numa string só (aconteceu ao
+  adicionar o modal de "Nova função") estoura isso e derruba o Nginx
+  inteiro, igual aos dois problemas acima. Por causa disso, o
+  JavaScript injetado no Studio não fica mais direto na diretiva
+  `sub_filter` - vive em `STUDIO_INJECT_JS` (dentro de
+  `login-server.js`), servido como arquivo estático de verdade em
+  `/studio-inject.js` (rota nova em `nginx.conf.tpl`), e o `sub_filter`
+  só injeta uma tag `<script src="/studio-inject.js">` pequena e fixa.
+  Isso também elimina os dois problemas de escape acima de vez, porque
+  esse conteúdo passa a ser só corpo de resposta HTTP normal, nunca
+  processado pelo parser de configuração do Nginx - dá pra editar esse
+  JS à vontade (formatado, sem minificar) sem se preocupar com nenhum
+  desses limites. Qualquer coisa nova pra injetar no Studio deveria
+  entrar ali, não direto no `sub_filter`.
 - **Funções criadas em `/admin` não aparecem em lugar nenhum (nem na aba
   Edge Functions do Studio, nem sobrevivem a um `docker compose down`).**
   `sh run.sh restart <serviço>` só reinicia o processo - ele **não** aplica

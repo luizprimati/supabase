@@ -949,6 +949,338 @@ ${THEME_CSS}
 </html>`;
 }
 
+// JS injetado pelo Nginx (sub_filter, veja nginx.conf.tpl) em toda página
+// do Studio: botão flutuante de logout + botão/modal de "Nova função" na
+// aba Edge Functions. Fica num arquivo servido por aqui (em vez de embutido
+// direto na diretiva sub_filter) porque o Nginx tem um limite de ~4KB por
+// parâmetro de configuração - o sub_filter só injeta uma tag <script src>
+// pequena e fixa; o conteúdo de verdade nunca passa pelo parser de config
+// do Nginx, então cresce à vontade sem esbarrar nesse teto.
+const STUDIO_INJECT_JS = `(function () {
+  'use strict';
+
+  function createLogoutButton() {
+    var btn = document.createElement('a');
+    btn.id = '__logout_fab';
+    btn.href = '/logout';
+    btn.title = 'Sair';
+    btn.style.position = 'fixed';
+    btn.style.bottom = '20px';
+    btn.style.right = '20px';
+    btn.style.zIndex = '999999';
+    btn.style.width = '32px';
+    btn.style.height = '32px';
+    btn.style.borderRadius = '50%';
+    btn.style.background = '#3ecf8e';
+    btn.style.color = '#05261a';
+    btn.style.display = 'flex';
+    btn.style.alignItems = 'center';
+    btn.style.justifyContent = 'center';
+    btn.style.boxShadow = '0 2px 8px rgba(0,0,0,.3)';
+    btn.style.textDecoration = 'none';
+    btn.style.opacity = '.7';
+    btn.style.transition = 'opacity .15s, transform .15s';
+    btn.addEventListener('mouseenter', function () {
+      btn.style.opacity = '1';
+      btn.style.background = '#34b87c';
+      btn.style.transform = 'scale(1.08)';
+    });
+    btn.addEventListener('mouseleave', function () {
+      btn.style.opacity = '.7';
+      btn.style.background = '#3ecf8e';
+      btn.style.transform = 'scale(1)';
+    });
+
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '15');
+    svg.setAttribute('height', '15');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    var path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4');
+    var poly = document.createElementNS(svgNS, 'polyline');
+    poly.setAttribute('points', '16 17 21 12 16 7');
+    var line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('x1', '21'); line.setAttribute('y1', '12');
+    line.setAttribute('x2', '9'); line.setAttribute('y2', '12');
+    svg.appendChild(path); svg.appendChild(poly); svg.appendChild(line);
+    btn.appendChild(svg);
+    document.body.appendChild(btn);
+  }
+
+  function isValidFnName(n) {
+    if (!n) return false;
+    if (n.length > 63) return false;
+    if (n === 'main') return false;
+    var c0 = n.charCodeAt(0);
+    if (c0 < 97 || c0 > 122) return false;
+    for (var i = 0; i < n.length; i++) {
+      var c = n.charCodeAt(i);
+      var ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 45 || c === 95;
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  var modalApi = null;
+  function getModal() {
+    if (modalApi) return modalApi;
+
+    var overlay = document.createElement('div');
+    overlay.id = '__fn_modal_overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.background = 'rgba(0,0,0,.5)';
+    overlay.style.display = 'none';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '1000000';
+    overlay.style.fontFamily = 'inherit';
+
+    var card = document.createElement('div');
+    card.style.background = '#fff';
+    card.style.borderRadius = '10px';
+    card.style.padding = '20px';
+    card.style.width = '320px';
+    card.style.boxSizing = 'border-box';
+    card.style.boxShadow = '0 10px 40px rgba(0,0,0,.3)';
+    card.style.fontFamily = 'inherit';
+
+    var title = document.createElement('div');
+    title.textContent = 'Nova função';
+    title.style.fontSize = '15px';
+    title.style.fontWeight = '600';
+    title.style.color = '#1c1c1c';
+    title.style.marginBottom = '12px';
+
+    var label = document.createElement('label');
+    label.textContent = 'Nome da função';
+    label.style.display = 'block';
+    label.style.fontSize = '12px';
+    label.style.color = '#555';
+    label.style.marginBottom = '6px';
+    label.style.fontWeight = '500';
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'minha-funcao';
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    input.style.padding = '8px 10px';
+    input.style.border = '1px solid #d4d4d4';
+    input.style.borderRadius = '6px';
+    input.style.fontSize = '13px';
+    input.style.fontFamily = 'inherit';
+    input.style.marginBottom = '4px';
+    input.style.outline = 'none';
+    input.addEventListener('focus', function () { input.style.borderColor = '#3ecf8e'; });
+    input.addEventListener('blur', function () { input.style.borderColor = '#d4d4d4'; });
+
+    var hint = document.createElement('div');
+    hint.textContent = 'Letras minúsculas, números, - ou _, começando com letra.';
+    hint.style.fontSize = '11px';
+    hint.style.color = '#888';
+    hint.style.marginBottom = '10px';
+
+    var errorMsg = document.createElement('div');
+    errorMsg.style.fontSize = '12px';
+    errorMsg.style.color = '#c0392b';
+    errorMsg.style.marginBottom = '10px';
+    errorMsg.style.display = 'none';
+
+    var actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+    actions.style.marginTop = '4px';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancelar';
+    cancelBtn.style.border = '1px solid #d4d4d4';
+    cancelBtn.style.background = '#fff';
+    cancelBtn.style.color = '#333';
+    cancelBtn.style.borderRadius = '6px';
+    cancelBtn.style.padding = '6px 14px';
+    cancelBtn.style.fontSize = '13px';
+    cancelBtn.style.fontFamily = 'inherit';
+    cancelBtn.style.cursor = 'pointer';
+
+    var createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.textContent = 'Criar';
+    createBtn.style.border = 'none';
+    createBtn.style.background = '#3ecf8e';
+    createBtn.style.color = '#05261a';
+    createBtn.style.fontWeight = '600';
+    createBtn.style.borderRadius = '6px';
+    createBtn.style.padding = '6px 14px';
+    createBtn.style.fontSize = '13px';
+    createBtn.style.fontFamily = 'inherit';
+    createBtn.style.cursor = 'pointer';
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(createBtn);
+    card.appendChild(title);
+    card.appendChild(label);
+    card.appendChild(input);
+    card.appendChild(hint);
+    card.appendChild(errorMsg);
+    card.appendChild(actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    function resetBtn() {
+      createBtn.disabled = false;
+      createBtn.textContent = 'Criar';
+    }
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = 'block';
+    }
+    function close() {
+      overlay.style.display = 'none';
+      input.value = '';
+      errorMsg.style.display = 'none';
+      resetBtn();
+    }
+    function submit() {
+      var name = input.value.trim();
+      if (!isValidFnName(name)) {
+        showError('Nome inválido.');
+        return;
+      }
+      errorMsg.style.display = 'none';
+      createBtn.disabled = true;
+      createBtn.textContent = 'Criando...';
+      var code = 'Deno.serve(() => Response.json({ message: "Hello from Edge Functions!" }));';
+      fetch('/admin/api/functions/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) {
+            resetBtn();
+            showError(res.d && res.d.error ? res.d.error : 'Não foi possível criar a função.');
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          resetBtn();
+          showError('Erro de rede ao criar a função.');
+        });
+    }
+
+    cancelBtn.addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    createBtn.addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') close();
+    });
+
+    modalApi = {
+      open: function () {
+        overlay.style.display = 'flex';
+        input.value = '';
+        errorMsg.style.display = 'none';
+        setTimeout(function () { input.focus(); }, 0);
+      },
+      remove: function () { overlay.remove(); },
+    };
+    return modalApi;
+  }
+
+  function createFnBtn() {
+    var btn = document.createElement('button');
+    btn.id = '__new_fn_btn';
+    btn.type = 'button';
+
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    var l1 = document.createElementNS(svgNS, 'line');
+    l1.setAttribute('x1', '12'); l1.setAttribute('y1', '5');
+    l1.setAttribute('x2', '12'); l1.setAttribute('y2', '19');
+    var l2 = document.createElementNS(svgNS, 'line');
+    l2.setAttribute('x1', '5'); l2.setAttribute('y1', '12');
+    l2.setAttribute('x2', '19'); l2.setAttribute('y2', '12');
+    svg.appendChild(l1); svg.appendChild(l2);
+    var lbl = document.createElement('span');
+    lbl.textContent = 'Nova função';
+    btn.appendChild(svg);
+    btn.appendChild(lbl);
+
+    btn.style.position = 'fixed';
+    btn.style.zIndex = '999999';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '6px';
+    btn.style.background = '#3ecf8e';
+    btn.style.color = '#05261a';
+    btn.style.fontWeight = '600';
+    btn.style.fontSize = '12px';
+    btn.style.fontFamily = 'inherit';
+    btn.style.cursor = 'pointer';
+    btn.style.boxSizing = 'border-box';
+    btn.style.height = '26px';
+    btn.style.lineHeight = '1';
+    btn.style.padding = '0 10px';
+    btn.style.display = 'inline-flex';
+    btn.style.alignItems = 'center';
+    btn.style.gap = '6px';
+    btn.style.justifyContent = 'center';
+    btn.addEventListener('click', function () { getModal().open(); });
+    document.body.appendChild(btn);
+    return btn;
+  }
+
+  function ensureFnBtn() {
+    var existing = document.getElementById('__new_fn_btn');
+    if (window.location.pathname.indexOf('/functions') === -1) {
+      if (existing) existing.remove();
+      var m = document.getElementById('__fn_modal_overlay');
+      if (m) m.remove();
+      modalApi = null;
+      return;
+    }
+    var els = document.querySelectorAll('a,button');
+    var examplesBtn = null;
+    for (var i = 0; i < els.length; i++) {
+      if (els[i].id !== '__new_fn_btn' && els[i].textContent.trim() === 'Examples') { examplesBtn = els[i]; break; }
+    }
+    if (!examplesBtn) {
+      if (existing) existing.remove();
+      return;
+    }
+    var btn = existing || createFnBtn();
+    var group = examplesBtn.parentElement || examplesBtn;
+    var groupRect = group.getBoundingClientRect();
+    var w = btn.offsetWidth || 140;
+    btn.style.top = groupRect.top + 'px';
+    btn.style.left = Math.max(8, groupRect.left - w - 8) + 'px';
+  }
+
+  createLogoutButton();
+  setInterval(ensureFnBtn, 600);
+  ensureFnBtn();
+})();
+`;
+
 function collectBody(req, callback) {
   let data = '';
   req.on('data', (chunk) => {
@@ -984,6 +1316,15 @@ function handleRequest(req, res) {
     const cookies = parseCookies(req.headers.cookie);
     res.writeHead(usernameFromToken(cookies[COOKIE_NAME]) ? 200 : 401);
     res.end();
+    return;
+  }
+
+  // Servido no lugar de embutir o JS direto na diretiva sub_filter do
+  // Nginx (que tem um limite de ~4KB por parâmetro de config) - veja
+  // STUDIO_INJECT_JS acima.
+  if (url.pathname === '/studio-inject.js' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+    res.end(STUDIO_INJECT_JS);
     return;
   }
 
