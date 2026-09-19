@@ -135,16 +135,6 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   recarregar a página) - se não aparecer, veja
   [Problemas conhecidos](#problemas-conhecidos-troubleshooting).
 
-  Pra não precisar sair do Studio pra criar uma função nova, o Nginx
-  injeta um botão **"Nova função"** do lado de "Docs"/"Examples" na
-  própria página de Edge Functions do Studio (procura o botão via
-  JavaScript, então funciona mesmo navegando pela SPA sem recarregar a
-  página). Ele só pede o nome, grava um template mínimo (mesma API do
-  `/admin`) e recarrega a página - o código de verdade você edita no
-  editor nativo do Studio (bem melhor que o do `/admin`). Só admins
-  conseguem usar (usuários comuns veem o botão mas recebem erro ao
-  clicar, já que a API por trás é restrita a admin).
-
 Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
