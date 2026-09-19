@@ -136,13 +136,15 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   [Problemas conhecidos](#problemas-conhecidos-troubleshooting).
 
   Pra não precisar sair do Studio pra criar uma função nova, o Nginx
-  injeta um botão **"Nova função"** do lado de "Docs"/"Examples" na
-  própria página de Edge Functions do Studio (procura o botão via
+  injeta um botão **"Nova função"** perto de "Docs"/"Examples" na
+  própria página de Edge Functions do Studio (acha a posição via
   JavaScript, então funciona mesmo navegando pela SPA sem recarregar a
-  página). Ele só pede o nome, grava um template mínimo (mesma API do
-  `/admin`) e recarrega a página - o código de verdade você edita no
-  editor nativo do Studio (bem melhor que o do `/admin`). Só admins
-  conseguem usar (usuários comuns veem o botão mas recebem erro ao
+  página - e fica fora da árvore que o React controla, senão o próprio
+  React apagava o botão no re-render seguinte). Ele só pede o nome,
+  grava um template mínimo (mesma API do `/admin`) e recarrega a
+  página - o código de verdade você edita no editor nativo do Studio
+  (bem melhor que o do `/admin`). Só admins conseguem usar (usuários
+  comuns veem o botão mas recebem erro ao
   clicar, já que a API por trás é restrita a admin).
 
   O Studio (essa versão) também tem uma aba **Edge Functions** na barra
