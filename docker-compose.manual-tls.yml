@@ -25,19 +25,15 @@ services:
   api-gw:
     ports: !reset []
 
-  # O Studio oficial (esta versão) já tem um editor próprio de Edge
-  # Functions, que lê/grava na mesma pasta volumes/functions (variável
-  # EDGE_FUNCTIONS_MANAGEMENT_FOLDER, ver CONFIG.md) que o nosso painel
-  # em /admin usa. O docker-compose.yml original monta essa pasta como
-  # somente leitura (":ro") no Studio, o que impede o editor nativo dele
-  # de gravar (e provavelmente quebra até a listagem). Como as duas
-  # interfaces apontam para o mesmo diretório do host, bastando liberar
-  # a escrita aqui elas já ficam sincronizadas automaticamente - uma
-  # função criada em qualquer uma das duas aparece na outra.
-  studio:
-    volumes: !override
-      - ./volumes/snippets:/app/snippets:z
-      - ./volumes/functions:/app/edge-functions:z
+  # O Studio (esta versão) tem uma aba "Edge Functions" que só LISTA o
+  # que já existe em volumes/functions (EDGE_FUNCTIONS_MANAGEMENT_FOLDER,
+  # ver CONFIG.md) - a Supabase desativou de propósito criar/editar por
+  # lá no self-hosted (a API self-hosted só tem rotas de leitura; ver
+  # supabase/supabase#40543). Por isso o mount original vem ":ro" - o
+  # Studio nunca escreve ali, então não há motivo pra liberar escrita
+  # (chegamos a fazer isso, mas era a hipótese errada; revertido). Quem
+  # cria/edita de verdade é o painel /admin (login-server.js), que grava
+  # direto na mesma pasta.
 
   login:
     container_name: supabase-studio-login
