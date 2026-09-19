@@ -65,6 +65,18 @@ server {
         auth_request /internal-auth;
         error_page 401 = @login_redirect;
         proxy_pass http://studio:3000;
+
+        # O Studio (imagem oficial) não sabe nada sobre o nosso login/sessão
+        # por fora, então não tem botão de sair. Injeta um botão flutuante
+        # de "Sair" em toda página HTML dele via sub_filter - fica fora da
+        # <div id="__next"> do Next.js, então sobrevive à navegação
+        # client-side da SPA (só a carga inicial de cada rota reinjeta).
+        # Accept-Encoding vazio força o Studio a responder sem compressão -
+        # sub_filter não reescreve corpo gzip/br.
+        proxy_set_header Accept-Encoding "";
+        sub_filter_types text/html;
+        sub_filter_once on;
+        sub_filter '</body>' '<style>#__logout_fab{position:fixed;bottom:20px;left:20px;z-index:2147483647;width:44px;height:44px;border-radius:50%;background:#3ecf8e;color:#05261a;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,.35);text-decoration:none}#__logout_fab:hover{background:#34b87c}</style><a id="__logout_fab" href="/logout" title="Sair"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></a></body>';
     }
 
     location @login_redirect {
