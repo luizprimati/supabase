@@ -546,7 +546,7 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
-      <a class="btn" href="/">Voltar ao Studio</a>
+      <a class="btn" href="/login">Voltar</a>
       <a class="btn" href="/logout">Sair</a>
     </div>
   </nav>
