@@ -125,6 +125,16 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   Cada função criada fica disponível em `/functions/v1/<nome>` (a URL
   aparece no próprio editor).
 
+  Essa versão do Studio (`supabase/studio:2026.09.07-sha-7996410`) **já
+  tem seu próprio editor nativo de Edge Functions** (variável
+  `EDGE_FUNCTIONS_MANAGEMENT_FOLDER`, ver `CONFIG.md`), apontando para a
+  mesma pasta `volumes/functions`. O `docker-compose.manual-tls.yml`
+  ajusta o mount dela para leitura/escrita (o arquivo oficial vem
+  `:ro`, o que quebrava o editor nativo) — as duas interfaces
+  (`/admin` e o Studio) ficam automaticamente sincronizadas, porque
+  são o mesmo diretório no disco. Use a que preferir; não precisa
+  escolher uma só.
+
 Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de

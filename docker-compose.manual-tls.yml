@@ -25,6 +25,20 @@ services:
   api-gw:
     ports: !reset []
 
+  # O Studio oficial (esta versão) já tem um editor próprio de Edge
+  # Functions, que lê/grava na mesma pasta volumes/functions (variável
+  # EDGE_FUNCTIONS_MANAGEMENT_FOLDER, ver CONFIG.md) que o nosso painel
+  # em /admin usa. O docker-compose.yml original monta essa pasta como
+  # somente leitura (":ro") no Studio, o que impede o editor nativo dele
+  # de gravar (e provavelmente quebra até a listagem). Como as duas
+  # interfaces apontam para o mesmo diretório do host, bastando liberar
+  # a escrita aqui elas já ficam sincronizadas automaticamente - uma
+  # função criada em qualquer uma das duas aparece na outra.
+  studio:
+    volumes: !override
+      - ./volumes/snippets:/app/snippets:z
+      - ./volumes/functions:/app/edge-functions:z
+
   login:
     container_name: supabase-studio-login
     image: node:20-alpine

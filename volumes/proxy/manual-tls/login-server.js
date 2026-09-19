@@ -565,7 +565,11 @@ ${THEME_CSS}
   .tab-btn.active { color: var(--text-strong); border-bottom-color: var(--accent); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
-  .editor-card { max-width: 760px; }
+  /* Precisa da dupla-classe (.card.editor-card) para ganhar de ".card"
+     mesmo estando definida antes dela no arquivo - CSS resolve empate de
+     especificidade pela ordem, e ".card" (mais abaixo) tinha um
+     max-width menor que sempre vencia. */
+  .card.editor-card { max-width: min(1900px, 96vw); width: 96vw; }
   .fn-url { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text-muted); word-break: break-all; }
   .CodeMirror { height: 380px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
   textarea#fn-code { width: 100%; height: 380px; margin-bottom: 16px; }
