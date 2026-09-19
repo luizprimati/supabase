@@ -239,6 +239,24 @@ registrado para não repetir o mesmo caminho:
   validar antes de mandar, a checagem mais confiável é contar os `$`
   do arquivo antes/depois da mudança e confirmar que só mudou onde
   era esperado.
+- **JS injetado via `sub_filter` quebra com `Uncaught SyntaxError:
+  Unexpected number` (ou parecido) só quando servido pelo Nginx - um
+  console.log ou script colado direto no navegador com o mesmo código
+  funciona normal.** O Nginx também processa `\"` dentro do valor
+  entre aspas simples do `sub_filter` - ele remove a barra e entrega só
+  `"` puro, fechando a string JavaScript antes da hora (some com o
+  `\` mas o `"` continua, e sobra um "número" ou identificador solto
+  onde o navegador não espera). Colar o mesmo trecho direto no Console
+  do navegador **não reproduz esse bug**, porque nesse caminho o texto
+  nunca passa pelo Nginx. Pra HTML/JS com aspas duplas aninhadas
+  (atributos de uma tag dentro de uma string JS, uma string com aspas
+  dentro de outra string), evite `\"` de vez: monte elementos via
+  `document.createElement`/`setAttribute` em vez de `innerHTML` com
+  string HTML, e para uma string JS que precisa ter aspas duplas
+  literais dentro, use crase (template literal) em vez de aspas duplas
+  como delimitador - aí a aspa dupla interna não precisa de escape
+  nenhum. A checagem confiável aqui é `grep -o '\\"' arquivo | wc -l`
+  no valor do `sub_filter` - se não for zero, tem risco.
 - **Funções criadas em `/admin` não aparecem em lugar nenhum (nem na aba
   Edge Functions do Studio, nem sobrevivem a um `docker compose down`).**
   `sh run.sh restart <serviço>` só reinicia o processo - ele **não** aplica
