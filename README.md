@@ -211,9 +211,11 @@ Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RA
 
 A sessão dura 7 dias (cookie); para sair antes disso, acesse
 `https://supabase.valletibooks.com.br:9443/logout` ou use o botão verde
-flutuante e discreto no canto inferior direito, injetado em toda página
-do Studio (que não tem logout próprio - não sabe nada do nosso login
-por fora).
+flutuante e discreto no canto inferior direito da tela principal do
+Studio (`/project/default`, a primeira página depois do login) - só
+aparece ali pra não brigar com outros elementos que já ocupam esse
+canto em várias páginas internas. O Studio não tem logout próprio -
+não sabe nada do nosso login por fora.
 
 ## Problemas conhecidos (troubleshooting)
 

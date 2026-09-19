@@ -960,6 +960,7 @@ const STUDIO_INJECT_JS = `(function () {
   'use strict';
 
   function createLogoutButton() {
+    if (document.getElementById('__logout_fab')) return;
     var btn = document.createElement('a');
     btn.id = '__logout_fab';
     btn.href = '/logout';
@@ -1281,9 +1282,26 @@ const STUDIO_INJECT_JS = `(function () {
     btn.style.left = Math.max(8, groupRect.left - w - 8) + 'px';
   }
 
-  createLogoutButton();
-  setInterval(ensureFnBtn, 600);
-  ensureFnBtn();
+  function ensureLogoutButton() {
+    // Só na tela principal (Project Overview, a primeira página depois do
+    // login) - em várias outras páginas do Studio já existe alguma coisa
+    // nesse mesmo canto, e o botão flutuante brigava com elas.
+    var isMainScreen = window.location.pathname === '/project/default';
+    var existing = document.getElementById('__logout_fab');
+    if (isMainScreen) {
+      if (!existing) createLogoutButton();
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+
+  function ensureAll() {
+    ensureLogoutButton();
+    ensureFnBtn();
+  }
+
+  setInterval(ensureAll, 600);
+  ensureAll();
 })();
 `;
 
