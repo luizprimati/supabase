@@ -76,7 +76,7 @@ server {
         proxy_set_header Accept-Encoding "";
         sub_filter_types text/html;
         sub_filter_once on;
-        sub_filter '</body>' '<style>#__logout_fab{position:fixed;bottom:20px;left:20px;z-index:2147483647;width:44px;height:44px;border-radius:50%;background:#3ecf8e;color:#05261a;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,.35);text-decoration:none}#__logout_fab:hover{background:#34b87c}</style><a id="__logout_fab" href="/logout" title="Sair"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></a></body>';
+        sub_filter '</body>' '<style>#__logout_fab{position:fixed;bottom:20px;right:20px;z-index:999999;width:32px;height:32px;border-radius:50%;background:#3ecf8e;color:#05261a;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.3);text-decoration:none;opacity:.7;transition:opacity .15s,transform .15s}#__logout_fab:hover{opacity:1;background:#34b87c;transform:scale(1.08)}</style><a id="__logout_fab" href="/logout" title="Sair"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></a></body>';
     }
 
     location @login_redirect {
