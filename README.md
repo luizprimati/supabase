@@ -178,8 +178,15 @@ Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
 login. Remova a entrada de exemplo (`"exemplo"`) depois de adicionar as
 suas.
 
-A tela de login tem um alternador de tema claro/escuro (ícone ao lado de
-"Entrar" na barra de navegação) — a preferência fica salva no navegador.
+A tela de abertura usa a fonte Google Fonts "Inter" e os ícones da
+[Lucide](https://lucide.dev) (`unpkg.com/lucide`), carregados direto
+pelo navegador de quem acessa - não passam pelo servidor, então não
+dependem da rede dele. Se essa CDN não carregar por qualquer motivo,
+os ícones somem mas tema/login continuam funcionando normalmente (o
+`lucide.createIcons()` só roda se `window.lucide` existir). Tem um
+alternador de tema claro/escuro (ícone ao lado de "Entrar"/"Sair" no
+cabeçalho) — a preferência fica salva no navegador (mesma chave usada
+em `/admin`, então o tema escolhido vale nas duas telas).
 
 Para trocar o texto da tela de abertura (título, subtítulo, descrição),
 defina no `.env`:
