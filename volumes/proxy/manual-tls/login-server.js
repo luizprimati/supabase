@@ -275,10 +275,25 @@ function readBackupConfig() {
   }
 }
 
+// Escrita direta (sem arquivo temporário + rename) - BACKUP_CONFIG_FILE
+// é um bind mount de um único arquivo (igual USERS_FILE), e um rename
+// por cima da própria montagem falha com EBUSY de dentro do container.
 function writeBackupConfig(config) {
-  const tmpPath = `${BACKUP_CONFIG_FILE}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2));
-  fs.renameSync(tmpPath, BACKUP_CONFIG_FILE);
+  fs.writeFileSync(BACKUP_CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+// Mesmo padrão de trySaveUsers - devolve 500 em vez de deixar uma
+// exceção (ex: permissão de arquivo) escapar de um callback síncrono e
+// derrubar o processo inteiro.
+function tryWriteBackupConfig(res, config) {
+  try {
+    writeBackupConfig(config);
+    return true;
+  } catch (e) {
+    console.error(`Não foi possível gravar ${BACKUP_CONFIG_FILE}: ${e.message}`);
+    sendJson(res, 500, { error: 'Não foi possível salvar - o arquivo backup-config.json está gravável no container?' });
+    return false;
+  }
 }
 
 // Nunca devolve client secret nem refresh token pro navegador.
@@ -2947,7 +2962,7 @@ function handleRequest(req, res) {
         const ret = Number(data.retentionCount);
         if (Number.isFinite(ret) && ret >= 1) next.retentionCount = Math.floor(ret);
 
-        writeBackupConfig(next);
+        if (!tryWriteBackupConfig(res, next)) return;
         sendJson(res, 200, maskBackupConfig(next));
       });
       return;
@@ -2999,7 +3014,7 @@ function handleRequest(req, res) {
     }
 
     if (url.pathname === '/admin/api/backup/disconnect' && req.method === 'POST') {
-      writeBackupConfig({ ...readBackupConfig(), googleRefreshToken: '' });
+      if (!tryWriteBackupConfig(res, { ...readBackupConfig(), googleRefreshToken: '' })) return;
       sendJson(res, 200, { ok: true });
       return;
     }
