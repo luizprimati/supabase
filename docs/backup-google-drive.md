@@ -3,12 +3,14 @@
 A aba `Backup` (em `/admin`) faz, na frequência que você
 escolher:
 
-1. `pg_dump` do Postgres (formato `custom`, já comprimido) → `db-<data>.dump`.
-2. `tar.gz` de `volumes/functions` → `edge-functions-<data>.tar.gz`.
-3. Sobe os dois pra uma pasta do seu Google Drive.
-4. Apaga os backups mais antigos que sobrarem além da retenção configurada
-   (contando os dois tipos separadamente - "manter 7" guarda os últimos 7
-   dumps de banco **e** os últimos 7 tars de functions).
+1. `pg_dump` do Postgres (formato `custom`, já comprimido) → `db.dump`.
+2. `tar.gz` de `volumes/functions` → `edge-functions.tar.gz`.
+3. Cria uma subpasta com o carimbo da rodada (formato `AAAAMMDDHHmm`,
+   ex.: `202609211228`) dentro da pasta que você escolheu, e sobe os dois
+   arquivos ali dentro.
+4. Apaga as subpastas mais antigas que sobrarem além da retenção
+   configurada (contando pastas inteiras - "manter 7" guarda as últimas
+   7 rodadas, cada uma com seu `db.dump` + `edge-functions.tar.gz`).
 
 Não inclui `volumes/storage` (arquivos do Storage) nesta versão - só
 banco e Edge Functions, como pedido.
@@ -51,22 +53,35 @@ uma única vez, um "OAuth Client" grátis no Google Cloud Console.
      https://supabase.primati.com.br:9443/admin/api/backup/oauth/callback
      ```
    - Salve e copie o **Client ID** e o **Client Secret** mostrados.
+6. **APIs e serviços → Biblioteca** → procure "Google Picker API" →
+   **Ativar** (é o seletor de pastas dentro do `/admin` - separado da
+   Drive API do passo 3).
+7. **APIs e serviços → Credenciais → Criar credenciais → Chave de API**:
+   - Copie a chave gerada.
+   - Recomendado: clique nela → em "Restrições de aplicativo" escolha
+     "Sites" (HTTP referrers) e adicione `https://supabase.primati.com.br/*`
+     (troque pelo seu domínio) - evita que outra pessoa use sua chave.
+   - Em "Restrições de API", pode restringir só à "Google Picker API".
 
 ## Configurar em `/admin`
 
 1. `/admin` → aba **Backup**.
-2. Cole o **Client ID** e o **Client Secret**, clique em **Salvar**.
+2. Cole o **Client ID**, o **Client Secret** e a **Google API Key**,
+   clique em **Salvar**.
 3. Clique em **Conectar ao Google Drive** - você é levado pra tela de
    consentimento do Google, aprova, e volta pro `/admin` já conectado.
-4. Crie (ou escolha) uma pasta no seu Drive só pra esses backups, abra
-   ela e copie o link da barra de endereço (algo como
-   `https://drive.google.com/drive/folders/1AbCdEfGh...`) - cole em
-   **"Pasta do Drive"** (aceita o link inteiro ou só o ID).
+4. Clique em **"Escolher pasta no Drive"** pra navegar e selecionar uma
+   pasta existente, ou em **"+ Criar nova pasta"** pra criar uma direto
+   pelo painel (sem precisar abrir o Drive em outra aba). Qualquer um dos
+   dois já preenche o campo "Pasta do Drive" sozinho - não precisa mais
+   copiar link/ID manualmente (mas o campo continua aceitando colar um
+   link/ID direto, se preferir).
 5. Escolha a **frequência** e quantos backups **manter** (retenção),
    clique em **Salvar**.
 6. Use **"Rodar backup agora"** pra testar imediatamente, sem esperar a
-   frequência configurada. O status (data/hora do último backup, sucesso
-   ou erro) aparece na própria tela.
+   frequência configurada - o botão fica desabilitado com "Backup em
+   andamento..." enquanto roda, e mostra sucesso ou erro assim que
+   termina (a tela verifica o progresso a cada poucos segundos sozinha).
 
 Depois de configurado, o backup roda sozinho no fundo (uma checagem a
 cada 5 minutos decide se já passou tempo suficiente desde a última
@@ -74,16 +89,24 @@ rodada) - não precisa de cron nem de nada externo ao container `login`.
 
 ## Restaurar um backup
 
+Abra a subpasta da rodada que quer restaurar (ex.: `202609211228`) e baixe os
+dois arquivos de dentro dela:
+
 ```bash
 # Banco de dados (dentro do container ou de uma máquina com pg_restore)
-pg_restore --clean --if-exists -d <nome-do-banco> db-2026-09-21T12-00-00-000Z.dump
+pg_restore --clean --if-exists -d <nome-do-banco> db.dump
 
 # Edge Functions
-tar xzf edge-functions-2026-09-21T12-00-00-000Z.tar.gz -C volumes/functions
+tar xzf edge-functions.tar.gz -C volumes/functions
 ```
 
 ## Limitações conhecidas
 
+- O seletor de pastas ("Escolher pasta no Drive") carrega um script do
+  próprio Google (`apis.google.com/js/api.js`) direto no navegador de
+  quem está usando o `/admin` - se essa CDN estiver bloqueada/sem
+  internet nesse momento, aparece um aviso e você ainda pode colar o
+  link/ID da pasta manualmente no campo, sem precisar do seletor.
 - O upload é feito de uma vez só (não é o protocolo "resumível" do
   Google) - suficiente pro tamanho normal de um projeto pessoal, mas se
   o banco crescer muito (centenas de MB+), vale revisitar.

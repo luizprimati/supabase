@@ -248,6 +248,7 @@ function deleteFunctionFile(name, relPath) {
 const DEFAULT_BACKUP_CONFIG = {
   googleClientId: '',
   googleClientSecret: '',
+  googleApiKey: '',
   googleRefreshToken: '',
   driveFolderId: '',
   frequencyHours: 24,
@@ -296,11 +297,15 @@ function tryWriteBackupConfig(res, config) {
   }
 }
 
-// Nunca devolve client secret nem refresh token pro navegador.
+// Nunca devolve client secret nem refresh token pro navegador. A API Key
+// não é segredo do mesmo jeito (é feita pra rodar no navegador, restrita
+// por HTTP referrer no Cloud Console) - por isso essa sim volta inteira,
+// o seletor de pastas (Google Picker) precisa dela no cliente.
 function maskBackupConfig(config) {
   return {
     googleClientId: config.googleClientId || '',
     hasClientSecret: !!config.googleClientSecret,
+    googleApiKey: config.googleApiKey || '',
     connected: !!config.googleRefreshToken,
     driveFolderId: config.driveFolderId || '',
     frequencyHours: config.frequencyHours,
@@ -308,6 +313,7 @@ function maskBackupConfig(config) {
     lastRunAt: config.lastRunAt,
     lastRunStatus: config.lastRunStatus,
     lastRunError: config.lastRunError,
+    running: backupRunning,
   };
 }
 
@@ -428,6 +434,33 @@ async function driveDeleteFile(accessToken, fileId) {
   }
 }
 
+// Usada tanto pra pasta do dia de cada rodada de backup quanto pelo
+// botão "+ Criar nova pasta" do seletor em /admin - sem parentId, cria
+// na raiz do Drive.
+async function driveCreateFolder(accessToken, name, parentId) {
+  const body = { name, mimeType: 'application/vnd.google-apps.folder' };
+  if (parentId) body.parents = [parentId];
+  const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Falha ao criar a pasta no Drive.');
+  return data;
+}
+
+async function driveListFolders(accessToken, parentId) {
+  const q = encodeURIComponent(`'${parentId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder'`);
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=1000`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Falha ao listar as pastas de backup no Drive.');
+  return data.files || [];
+}
+
 function execFileAsync(cmd, args, options) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, options, (err, stdout, stderr) => {
@@ -451,13 +484,19 @@ async function tarFunctions(destPath) {
   await execFileAsync('tar', ['czf', destPath, '-C', FUNCTIONS_DIR, '.'], { maxBuffer: 1024 * 1024 * 1024 });
 }
 
-// Mantém só os N pares (banco + functions) mais recentes na pasta -
-// agrupa pelo prefixo do nome porque cada rodada sobe os dois juntos.
+// AAAAMMDDHHmm (sem separador) - vira o nome da subpasta de cada rodada.
+function backupFolderStamp(date) {
+  const d = date || new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+// Mantém só as N subpastas (uma por rodada) mais recentes dentro da
+// pasta configurada - excluir a subpasta já leva os 2 arquivos junto.
 async function pruneOldBackups(accessToken, config) {
-  const files = await driveListFolderFiles(accessToken, config.driveFolderId);
-  const byPrefix = (prefix) =>
-    files.filter((f) => f.name.startsWith(prefix)).sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
-  const toDelete = [...byPrefix('db-').slice(config.retentionCount), ...byPrefix('edge-functions-').slice(config.retentionCount)];
+  const folders = await driveListFolders(accessToken, config.driveFolderId);
+  const sorted = folders.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+  const toDelete = sorted.slice(config.retentionCount);
   for (const f of toDelete) {
     await driveDeleteFile(accessToken, f.id);
   }
@@ -468,10 +507,9 @@ async function performBackup() {
   if (!config.googleRefreshToken) throw new Error('Google Drive não está conectado.');
   if (!config.driveFolderId) throw new Error('Nenhuma pasta do Drive configurada.');
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-'));
-  const dbPath = path.join(tmpDir, `db-${stamp}.dump`);
-  const fnPath = path.join(tmpDir, `edge-functions-${stamp}.tar.gz`);
+  const dbPath = path.join(tmpDir, 'db.dump');
+  const fnPath = path.join(tmpDir, 'edge-functions.tar.gz');
 
   try {
     const accessToken = await refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken);
@@ -479,8 +517,10 @@ async function performBackup() {
     await dumpPostgres(dbPath);
     await tarFunctions(fnPath);
 
-    await driveUploadFile(accessToken, { name: path.basename(dbPath), parents: [config.driveFolderId], mimeType: 'application/octet-stream', filePath: dbPath });
-    await driveUploadFile(accessToken, { name: path.basename(fnPath), parents: [config.driveFolderId], mimeType: 'application/gzip', filePath: fnPath });
+    const dayFolder = await driveCreateFolder(accessToken, backupFolderStamp(), config.driveFolderId);
+
+    await driveUploadFile(accessToken, { name: 'db.dump', parents: [dayFolder.id], mimeType: 'application/octet-stream', filePath: dbPath });
+    await driveUploadFile(accessToken, { name: 'edge-functions.tar.gz', parents: [dayFolder.id], mimeType: 'application/gzip', filePath: fnPath });
 
     await pruneOldBackups(accessToken, config);
 
@@ -1588,13 +1628,24 @@ ${THEME_CSS}
         <input type="password" id="backupClientSecret" autocomplete="off" placeholder="cole o client secret">
         <p class="hint">Crie em console.cloud.google.com (veja o passo a passo no README) - a chave fica salva só no servidor, nunca é mostrada de volta aqui.</p>
 
+        <label for="backupApiKey">Google API Key (só para o seletor de pastas)</label>
+        <input type="text" id="backupApiKey" autocomplete="off" placeholder="AIza...">
+        <p class="hint">Também criada em console.cloud.google.com - precisa ativar a "Google Picker API". Essa chave roda no navegador (restrinja por domínio lá no Cloud Console).</p>
+
         <div class="backup-connect-row">
           <button type="button" class="btn" id="backupConnectBtn">Conectar ao Google Drive</button>
           <button type="button" class="btn" id="backupDisconnectBtn" style="display:none;">Desconectar</button>
         </div>
 
-        <label for="backupFolder">Pasta do Drive (cole o link ou o ID)</label>
-        <input type="text" id="backupFolder" autocomplete="off" placeholder="https://drive.google.com/drive/folders/...">
+        <label for="backupFolder">Pasta do Drive</label>
+        <input type="text" id="backupFolder" autocomplete="off" placeholder="Nenhuma pasta selecionada - use os botões abaixo ou cole um link/ID">
+        <div class="backup-connect-row">
+          <button type="button" class="btn" id="backupPickFolderBtn">Escolher pasta no Drive</button>
+          <button type="button" class="btn" id="backupNewFolderBtn">+ Criar nova pasta</button>
+        </div>
+        <div class="fn-new-file-row" id="backupNewFolderRow" style="display:none;">
+          <input type="text" id="backupNewFolderInput" placeholder="Nome da nova pasta">
+        </div>
 
         <label for="backupFrequency">Frequência</label>
         <select id="backupFrequency">
@@ -1807,10 +1858,13 @@ ${THEME_CSS}
     }
     function backupHideMsg() { document.getElementById('backupMsg').style.display = 'none'; }
 
+    var backupRunNowBtn = document.getElementById('backupRunNowBtn');
+
     function renderBackupConfig(cfg) {
       document.getElementById('backupClientId').value = cfg.googleClientId || '';
       document.getElementById('backupClientSecret').value = '';
       document.getElementById('backupClientSecret').placeholder = cfg.hasClientSecret ? 'deixe em branco para manter o valor salvo' : 'cole o client secret';
+      document.getElementById('backupApiKey').value = cfg.googleApiKey || '';
       document.getElementById('backupFolder').value = cfg.driveFolderId || '';
       document.getElementById('backupFrequency').value = String(cfg.frequencyHours || 24);
       document.getElementById('backupRetention').value = cfg.retentionCount || 7;
@@ -1831,6 +1885,9 @@ ${THEME_CSS}
         connectBtn.style.display = 'inline-block';
         disconnectBtn.style.display = 'none';
       }
+
+      backupRunNowBtn.disabled = !!cfg.running;
+      backupRunNowBtn.textContent = cfg.running ? 'Backup em andamento...' : 'Rodar backup agora';
     }
 
     function loadBackupConfig() {
@@ -1842,6 +1899,7 @@ ${THEME_CSS}
       var payload = {
         googleClientId: document.getElementById('backupClientId').value.trim(),
         googleClientSecret: document.getElementById('backupClientSecret').value,
+        googleApiKey: document.getElementById('backupApiKey').value.trim(),
         driveFolderInput: document.getElementById('backupFolder').value.trim(),
         frequencyHours: Number(document.getElementById('backupFrequency').value),
         retentionCount: Number(document.getElementById('backupRetention').value),
@@ -1870,14 +1928,102 @@ ${THEME_CSS}
       });
     });
 
-    document.getElementById('backupRunNowBtn').addEventListener('click', function () {
+    // --- Seletor de pasta (Google Picker) ---
+    function loadGooglePicker(callback) {
+      if (window.google && window.google.picker) { callback(); return; }
+      if (window.gapi) { gapi.load('picker', callback); return; }
+      var script = document.createElement('script');
+      script.src = 'https://apis.google.com/js/api.js';
+      script.onload = function () { gapi.load('picker', callback); };
+      script.onerror = function () { backupShowMsg('Não foi possível carregar o seletor do Google (sem internet ou CDN bloqueada).', 'error'); };
+      document.head.appendChild(script);
+    }
+
+    document.getElementById('backupPickFolderBtn').addEventListener('click', function () {
+      backupHideMsg();
+      var apiKey = document.getElementById('backupApiKey').value.trim();
+      if (!apiKey) { backupShowMsg('Salve a Google API Key antes de escolher uma pasta.', 'error'); return; }
+      fetch('/admin/api/backup/drive/access-token').then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+        if (!res.ok) { backupShowMsg(res.d.error || 'Conecte o Google Drive primeiro.', 'error'); return; }
+        loadGooglePicker(function () {
+          var view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+            .setIncludeFolders(true)
+            .setSelectFolderEnum(google.picker.DocsViewMode.LIST);
+          var picker = new google.picker.PickerBuilder()
+            .addView(view)
+            .setOAuthToken(res.d.accessToken)
+            .setDeveloperKey(apiKey)
+            .setCallback(function (data) {
+              if (data.action === google.picker.Action.PICKED) {
+                var folder = data.docs[0];
+                document.getElementById('backupFolder').value = folder.id;
+                backupShowMsg('Pasta selecionada: ' + folder.name + ' - clique em Salvar pra confirmar.', 'ok');
+              }
+            })
+            .build();
+          picker.setVisible(true);
+        });
+      });
+    });
+
+    var backupNewFolderBtn = document.getElementById('backupNewFolderBtn');
+    var backupNewFolderRow = document.getElementById('backupNewFolderRow');
+    var backupNewFolderInput = document.getElementById('backupNewFolderInput');
+
+    function confirmNewBackupFolder() {
+      var name = backupNewFolderInput.value.trim();
+      if (!name) return;
+      backupHideMsg();
+      fetch('/admin/api/backup/drive/create-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { backupShowMsg(res.d.error || 'Não foi possível criar a pasta.', 'error'); return; }
+          backupNewFolderRow.style.display = 'none';
+          document.getElementById('backupFolder').value = res.d.id;
+          backupShowMsg('Pasta "' + res.d.name + '" criada - clique em Salvar pra confirmar.', 'ok');
+        });
+    }
+
+    backupNewFolderBtn.addEventListener('click', function () {
+      backupNewFolderRow.style.display = 'block';
+      backupNewFolderInput.value = '';
+      backupNewFolderInput.focus();
+    });
+    backupNewFolderInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); confirmNewBackupFolder(); }
+      if (e.key === 'Escape') { backupNewFolderRow.style.display = 'none'; }
+    });
+    backupNewFolderInput.addEventListener('blur', function () {
+      setTimeout(function () { backupNewFolderRow.style.display = 'none'; }, 150);
+    });
+
+    // --- Rodar agora, com acompanhamento de progresso ---
+    function pollBackupStatus() {
+      fetch('/admin/api/backup/config').then(function (r) { return r.json(); }).then(function (cfg) {
+        renderBackupConfig(cfg);
+        if (cfg.running) {
+          setTimeout(pollBackupStatus, 2000);
+        } else if (cfg.lastRunStatus === 'ok') {
+          backupShowMsg('Backup concluído com sucesso.', 'ok');
+          setTimeout(backupHideMsg, 4000);
+        } else if (cfg.lastRunStatus === 'error') {
+          backupShowMsg('Backup falhou: ' + (cfg.lastRunError || ''), 'error');
+        }
+      });
+    }
+
+    backupRunNowBtn.addEventListener('click', function () {
       backupHideMsg();
       fetch('/admin/api/backup/run-now', { method: 'POST' })
         .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
         .then(function (res) {
           if (!res.ok) { backupShowMsg(res.d.error || 'Não foi possível iniciar o backup.', 'error'); return; }
-          backupShowMsg('Backup iniciado - isso pode levar alguns minutos.', 'ok');
-          setTimeout(loadBackupConfig, 8000);
+          backupShowMsg('Backup em andamento...', 'ok');
+          pollBackupStatus();
         });
     });
 
@@ -2957,6 +3103,7 @@ function handleRequest(req, res) {
         if (typeof data.googleClientSecret === 'string' && data.googleClientSecret.trim()) {
           next.googleClientSecret = data.googleClientSecret.trim();
         }
+        if (typeof data.googleApiKey === 'string') next.googleApiKey = data.googleApiKey.trim();
         if (typeof data.driveFolderInput === 'string' && data.driveFolderInput.trim()) {
           const id = extractDriveFolderId(data.driveFolderInput);
           if (!id) { sendJson(res, 400, { error: 'Não entendi essa pasta do Drive - cole o link ou o ID da pasta.' }); return; }
@@ -3015,6 +3162,37 @@ function handleRequest(req, res) {
           res.writeHead(302, { Location: `/admin?backupError=${encodeURIComponent(e.message)}` });
           res.end();
         });
+      return;
+    }
+
+    // Token de acesso de curta duração pro Google Picker rodar no
+    // navegador do admin (escolher/navegar pastas do Drive) - nunca é
+    // persistido, só passa por essa resposta.
+    if (url.pathname === '/admin/api/backup/drive/access-token' && req.method === 'GET') {
+      const config = readBackupConfig();
+      if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
+      refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken)
+        .then((accessToken) => sendJson(res, 200, { accessToken }))
+        .catch((e) => sendJson(res, 500, { error: e.message }));
+      return;
+    }
+
+    // Botão "+ Criar nova pasta" do seletor - cria direto na raiz do
+    // Drive (é só pra escolher o destino dos backups, não precisa
+    // navegar/criar em subpastas específicas).
+    if (url.pathname === '/admin/api/backup/drive/create-folder' && req.method === 'POST') {
+      const config = readBackupConfig();
+      if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
+      collectBody(req, (body) => {
+        let data;
+        try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+        const name = typeof data.name === 'string' ? data.name.trim() : '';
+        if (!name) { sendJson(res, 400, { error: 'Informe um nome para a pasta.' }); return; }
+        refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken)
+          .then((accessToken) => driveCreateFolder(accessToken, name))
+          .then((folder) => sendJson(res, 200, folder))
+          .catch((e) => sendJson(res, 500, { error: e.message }));
+      });
       return;
     }
 
