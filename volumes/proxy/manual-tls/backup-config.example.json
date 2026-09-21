@@ -1,0 +1,11 @@
+{
+  "googleClientId": "",
+  "googleClientSecret": "",
+  "googleRefreshToken": "",
+  "driveFolderId": "",
+  "frequencyHours": 24,
+  "retentionCount": 7,
+  "lastRunAt": null,
+  "lastRunStatus": null,
+  "lastRunError": null
+}

@@ -39,7 +39,20 @@ services:
     container_name: supabase-studio-login
     image: node:20-alpine
     restart: unless-stopped
-    command: ["node", "/app/login-server.js"]
+    # `pg_dump` (backup do Postgres) e `tar` (backup das Edge Functions)
+    # não vêm na imagem node:20-alpine - instala na subida do container
+    # em vez de criar uma imagem própria/Dockerfile só pra isso (mantém o
+    # "sem dependências, roda direto na imagem oficial" do resto do
+    # projeto). Custa uns segundos a mais no start; se o servidor não
+    # tiver saída pra internet nesse momento, os backups falham mas o
+    # login/admin continuam funcionando normalmente.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache postgresql-client tar >/dev/null
+        exec node /app/login-server.js
     environment:
       # Reaproveita um segredo que já existe no .env (gerado pelo
       # utils/generate-keys.sh) em vez de introduzir uma variável nova só
@@ -50,6 +63,14 @@ services:
       PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION:-}
       FUNCTIONS_DIR: /app/functions
       PORT: "8085"
+      # Só para o `pg_dump` do backup (Configurações > Backup em /admin) -
+      # mesmas credenciais que os outros serviços já usam pra falar com o
+      # container "db", nenhuma nova sendo introduzida.
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_CONFIG_FILE: /app/backup-config.json
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8085/login"]
       interval: 10s
@@ -69,6 +90,11 @@ services:
       # direto nos arquivos que o dispatcher (volumes/functions/main) já
       # lê do disco a cada requisição (sem precisar reiniciar nada).
       - ./volumes/functions:/app/functions
+      # Config do backup (credenciais OAuth do Google, pasta do Drive,
+      # frequência, retenção) - veja backup-config.example.json. Nunca
+      # versionado (tem client secret + refresh token); crie a partir do
+      # .example.
+      - ./volumes/proxy/manual-tls/backup-config.json:/app/backup-config.json
 
   nginx:
     container_name: supabase-nginx-manual

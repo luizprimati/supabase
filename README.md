@@ -95,6 +95,15 @@ salt+hash (scrypt) em `volumes/proxy/manual-tls/users.json` (gitignored).
 cp volumes/proxy/manual-tls/users.example.json volumes/proxy/manual-tls/users.json
 ```
 
+Aproveite e já crie o arquivo de configuração do backup (Passo 5.1, mais
+abaixo) — ele também precisa existir **antes** do Passo 6, pelo mesmo
+motivo do `users.json`: se o arquivo não existir no host, o Docker cria
+uma **pasta** no lugar dele, e o container quebra.
+
+```bash
+cp volumes/proxy/manual-tls/backup-config.example.json volumes/proxy/manual-tls/backup-config.json
+```
+
 Depois de subir a stack (Passo 6), gere o hash de cada senha:
 
 ```bash
@@ -113,7 +122,7 @@ Isso imprime `{"salt": "...", "hash": "..."}`. Edite
 
 `"role"` é `"admin"` ou `"user"` (padrão se omitido). **Pelo menos um
 usuário precisa ser `"admin"`** — é ele quem consegue acessar
-`https://SEU_DOMINIO:9443/admin`, um painel com duas abas:
+`https://SEU_DOMINIO:9443/admin`, um painel com três abas:
 
 - **Usuários** — CRUD para cadastrar, editar (senha/papel) e excluir os
   demais usuários direto pelo navegador, sem precisar mexer em
@@ -172,6 +181,23 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   pra um ganho cada vez menor, por isso desistimos disso e ficamos só
   com o atalho pro editor do `/admin`, que já é robusto.
 
+  Editar uma função existente abre um editor com **barra lateral de
+  arquivos** (igual ao Studio original) — o `index.ts` é só o ponto de
+  entrada; dá pra criar quantos arquivos extras quiser na mesma pasta
+  (inclusive em subpastas, ex.: `lib/helper.ts`) pelo botão **"+ Novo
+  arquivo"**, e importar entre eles com import relativo normal
+  (`import { algo } from "./lib/helper.ts"`) - o dispatcher
+  (`volumes/functions/main/index.ts`) já aponta pra pasta inteira da
+  função, então isso funciona sem nenhuma mudança de infraestrutura. O
+  `index.ts` não pode ser excluído por ali (exclua a função inteira se
+  quiser removê-lo).
+
+- **Configurações → Backup** — backup automático do banco (Postgres, via
+  `pg_dump`) e das Edge Functions (`.tar.gz`) pro Google Drive da sua
+  própria conta. Veja o passo a passo completo (criar as credenciais no
+  Google Cloud Console, conectar, escolher a pasta/frequência/retenção)
+  em [docs/backup-google-drive.md](docs/backup-google-drive.md).
+
 Quem é `"user"` não vê esse painel (dá 403).
 
 Não precisa reiniciar nada — o arquivo é relido a cada tentativa de
@@ -212,7 +238,11 @@ sh run.sh start
   AzuraCast é tocado. Também sobe um container `login` (Node.js, sem
   dependências) que serve a tela de abertura + login do Studio — o Nginx
   valida a sessão via `auth_request` em vez de Basic Auth do navegador.
-  Código em `volumes/proxy/manual-tls/login-server.js`.
+  Código em `volumes/proxy/manual-tls/login-server.js`. Esse container
+  instala `postgresql-client`/`tar` (pra função de Backup) toda vez que
+  sobe, via `apk` - precisa de saída à internet nesse momento; se faltar,
+  login/admin continuam funcionando normalmente, só o backup fica
+  indisponível até a próxima subida com internet.
 - `override` restringe Postgres/pooler a `127.0.0.1` (nunca precisam ser
   públicos). Precisa ser adicionado explicitamente porque o `manual-tls`
   já deixa o `COMPOSE_FILE` explícito no `.env`, o que desliga o

@@ -19,9 +19,11 @@
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const querystring = require('querystring');
 const { URL } = require('url');
+const { execFile } = require('child_process');
 
 const PORT = process.env.PORT || 8085;
 const COOKIE_SECRET = process.env.AUTH_COOKIE_SECRET || '';
@@ -29,6 +31,18 @@ const USERS_FILE = process.env.USERS_FILE || '/app/users.json';
 const FUNCTIONS_DIR = process.env.FUNCTIONS_DIR || '/app/functions';
 const COOKIE_NAME = 'supabase_studio_auth';
 const SESSION_HOURS = parseInt(process.env.AUTH_SESSION_HOURS || '168', 10);
+
+// Backup (Configurações > Backup em /admin) - dump do Postgres via
+// pg_dump (mesmas credenciais que os outros serviços do compose já
+// usam) + tar das Edge Functions, subidos pro Google Drive do usuário.
+const BACKUP_CONFIG_FILE = process.env.BACKUP_CONFIG_FILE || '/app/backup-config.json';
+const PG_ENV = {
+  PGHOST: process.env.POSTGRES_HOST || 'db',
+  PGPORT: process.env.POSTGRES_PORT || '5432',
+  PGDATABASE: process.env.POSTGRES_DB || 'postgres',
+  PGPASSWORD: process.env.POSTGRES_PASSWORD || '',
+  PGUSER: 'postgres',
+};
 
 // Conteúdo da tela de abertura - troque por env var sem tocar no código.
 const PROJECT_TITLE = process.env.PROJECT_TITLE || 'Valleti Books & Rádio';
@@ -223,6 +237,265 @@ function deleteFunctionFile(name, relPath) {
     dir = path.dirname(dir);
   }
 }
+
+// --- Backup (Configurações > Backup em /admin) ---------------------------
+// Faz dump do Postgres (pg_dump) + tar.gz das Edge Functions e sobe os
+// dois pro Google Drive do próprio usuário via OAuth (scope "drive.file",
+// restrito aos arquivos que este app cria - nunca vê o resto do Drive).
+// Usa só o `fetch` global do Node (disponível desde a v18, sem precisar
+// de nenhuma dependência nova) pra falar com a API do Google.
+
+const DEFAULT_BACKUP_CONFIG = {
+  googleClientId: '',
+  googleClientSecret: '',
+  googleRefreshToken: '',
+  driveFolderId: '',
+  frequencyHours: 24,
+  retentionCount: 7,
+  lastRunAt: null,
+  lastRunStatus: null,
+  lastRunError: null,
+};
+
+const GOOGLE_OAUTH_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+// CSRF do fluxo OAuth: state gerado em /oauth/start, conferido em
+// /oauth/callback. Fica só em memória - se o processo reiniciar no meio
+// do fluxo, o usuário só precisa clicar em "Conectar" de novo.
+const pendingOAuthStates = new Set();
+let backupRunning = false;
+
+function readBackupConfig() {
+  try {
+    const raw = fs.readFileSync(BACKUP_CONFIG_FILE, 'utf8');
+    return { ...DEFAULT_BACKUP_CONFIG, ...JSON.parse(raw) };
+  } catch (e) {
+    console.error(`Não foi possível ler ${BACKUP_CONFIG_FILE}: ${e.message}`);
+    return { ...DEFAULT_BACKUP_CONFIG };
+  }
+}
+
+function writeBackupConfig(config) {
+  const tmpPath = `${BACKUP_CONFIG_FILE}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2));
+  fs.renameSync(tmpPath, BACKUP_CONFIG_FILE);
+}
+
+// Nunca devolve client secret nem refresh token pro navegador.
+function maskBackupConfig(config) {
+  return {
+    googleClientId: config.googleClientId || '',
+    hasClientSecret: !!config.googleClientSecret,
+    connected: !!config.googleRefreshToken,
+    driveFolderId: config.driveFolderId || '',
+    frequencyHours: config.frequencyHours,
+    retentionCount: config.retentionCount,
+    lastRunAt: config.lastRunAt,
+    lastRunStatus: config.lastRunStatus,
+    lastRunError: config.lastRunError,
+  };
+}
+
+// Aceita tanto um link completo da pasta ("https://drive.google.com/
+// drive/folders/<id>?usp=sharing") quanto só o ID, pra colar direto da
+// barra de endereço do navegador.
+function extractDriveFolderId(input) {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return '';
+  const match = trimmed.match(/\/folders\/([A-Za-z0-9_-]+)/);
+  if (match) return match[1];
+  if (/^[A-Za-z0-9_-]+$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+function backupRedirectUri(req) {
+  return `https://${req.headers.host}/admin/api/backup/oauth/callback`;
+}
+
+function buildGoogleAuthUrl(clientId, redirectUri, state) {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GOOGLE_OAUTH_SCOPE,
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+async function exchangeGoogleCode(clientId, clientSecret, code, redirectUri) {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Falha ao trocar o código pelo token do Google.');
+  return data;
+}
+
+async function refreshGoogleAccessToken(clientId, clientSecret, refreshToken) {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Falha ao renovar o token do Google (reconecte o Drive em Configurações).');
+  return data.access_token;
+}
+
+// Upload multipart (metadados JSON + conteúdo do arquivo numa só
+// requisição) - mais simples que o protocolo resumível e suficiente pro
+// tamanho normal de um dump/tar deste projeto; se falhar no meio, a
+// rodada de backup inteira falha e tenta de novo na próxima janela.
+async function driveUploadFile(accessToken, { name, parents, mimeType, filePath }) {
+  const boundary = `foilboundary${crypto.randomBytes(8).toString('hex')}`;
+  const metadata = JSON.stringify({ name, parents });
+  const fileData = fs.readFileSync(filePath);
+  const prefix = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
+  );
+  const suffix = Buffer.from(`\r\n--${boundary}--`);
+  const body = Buffer.concat([prefix, fileData, suffix]);
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || `Falha ao enviar ${name} pro Drive.`);
+  return data;
+}
+
+async function driveListFolderFiles(accessToken, folderId) {
+  const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=1000`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Falha ao listar arquivos da pasta do Drive.');
+  return data.files || [];
+}
+
+async function driveDeleteFile(accessToken, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error?.message || 'Falha ao excluir um backup antigo do Drive.');
+  }
+}
+
+function execFileAsync(cmd, args, options) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, options, (err, stdout, stderr) => {
+      if (err) { err.stderr = stderr; reject(err); return; }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+// Formato "custom" do pg_dump (-Fc): binário, já comprimido sozinho, e
+// restaurável com pg_restore - evita ter que gzipar por fora.
+async function dumpPostgres(destPath) {
+  await execFileAsync(
+    'pg_dump',
+    ['--no-owner', '--no-privileges', '--format=custom', '--file', destPath],
+    { env: { ...process.env, ...PG_ENV }, maxBuffer: 1024 * 1024 * 1024 }
+  );
+}
+
+async function tarFunctions(destPath) {
+  await execFileAsync('tar', ['czf', destPath, '-C', FUNCTIONS_DIR, '.'], { maxBuffer: 1024 * 1024 * 1024 });
+}
+
+// Mantém só os N pares (banco + functions) mais recentes na pasta -
+// agrupa pelo prefixo do nome porque cada rodada sobe os dois juntos.
+async function pruneOldBackups(accessToken, config) {
+  const files = await driveListFolderFiles(accessToken, config.driveFolderId);
+  const byPrefix = (prefix) =>
+    files.filter((f) => f.name.startsWith(prefix)).sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+  const toDelete = [...byPrefix('db-').slice(config.retentionCount), ...byPrefix('edge-functions-').slice(config.retentionCount)];
+  for (const f of toDelete) {
+    await driveDeleteFile(accessToken, f.id);
+  }
+}
+
+async function performBackup() {
+  const config = readBackupConfig();
+  if (!config.googleRefreshToken) throw new Error('Google Drive não está conectado.');
+  if (!config.driveFolderId) throw new Error('Nenhuma pasta do Drive configurada.');
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-'));
+  const dbPath = path.join(tmpDir, `db-${stamp}.dump`);
+  const fnPath = path.join(tmpDir, `edge-functions-${stamp}.tar.gz`);
+
+  try {
+    const accessToken = await refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken);
+
+    await dumpPostgres(dbPath);
+    await tarFunctions(fnPath);
+
+    await driveUploadFile(accessToken, { name: path.basename(dbPath), parents: [config.driveFolderId], mimeType: 'application/octet-stream', filePath: dbPath });
+    await driveUploadFile(accessToken, { name: path.basename(fnPath), parents: [config.driveFolderId], mimeType: 'application/gzip', filePath: fnPath });
+
+    await pruneOldBackups(accessToken, config);
+
+    writeBackupConfig({ ...readBackupConfig(), lastRunAt: new Date().toISOString(), lastRunStatus: 'ok', lastRunError: null });
+  } catch (e) {
+    console.error(`Backup falhou: ${e.message}`);
+    writeBackupConfig({ ...readBackupConfig(), lastRunAt: new Date().toISOString(), lastRunStatus: 'error', lastRunError: e.message });
+    throw e;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function runBackupInBackground() {
+  backupRunning = true;
+  performBackup()
+    .catch((e) => console.error(`Backup em segundo plano falhou: ${e.message}`))
+    .finally(() => { backupRunning = false; });
+}
+
+// Roda a cada 5 min só a checagem (barata: 1 leitura de arquivo); dispara
+// o backup de verdade quando já passou tempo suficiente desde a última
+// rodada com sucesso ou falha (evita tentar de novo a cada 5 min se o
+// Drive estiver fora do ar, por exemplo).
+function maybeRunScheduledBackup() {
+  if (backupRunning) return;
+  const config = readBackupConfig();
+  if (!config.googleRefreshToken || !config.driveFolderId) return;
+  const frequencyMs = (config.frequencyHours || 24) * 60 * 60 * 1000;
+  const lastRun = config.lastRunAt ? new Date(config.lastRunAt).getTime() : 0;
+  if (Date.now() - lastRun < frequencyMs) return;
+  runBackupInBackground();
+}
+
+setInterval(maybeRunScheduledBackup, 5 * 60 * 1000);
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -896,6 +1169,16 @@ ${THEME_CSS}
     width: 100%; padding: 6px 8px; margin-top: 4px; font-size: 12px; font-family: ui-monospace, Menlo, monospace;
   }
   .fn-editor-main { flex: 1; min-width: 0; }
+  .settings-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; max-width: 520px; }
+  .settings-card h2 { margin: 0 0 20px; font-size: 16px; color: var(--text-strong); }
+  .backup-status {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border); font-size: 13px; margin-bottom: 20px;
+  }
+  .backup-status .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .backup-status.connected .dot { background: var(--accent); }
+  .backup-status.disconnected .dot { background: var(--text-muted); }
+  .backup-connect-row { display: flex; gap: 10px; margin-bottom: 20px; }
   .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
   .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
   table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -935,6 +1218,11 @@ ${THEME_CSS}
     border-radius: 16px; padding: 32px; position: relative;
   }
   .card h2 { margin: 0 0 20px; font-size: 18px; color: var(--text-strong); }
+  .card .close {
+    position: absolute; top: 16px; right: 16px; background: none; border: none;
+    color: var(--text-muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 4px;
+  }
+  .card .close:hover { color: var(--text-strong); }
   label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text-muted); font-weight: 500; }
   input, select {
     width: 100%; padding: 10px 12px; margin-bottom: 16px; border-radius: 8px;
@@ -967,6 +1255,7 @@ ${THEME_CSS}
     <div class="tabs">
       <button class="tab-btn active" data-tab="users" type="button">Usuários</button>
       <button class="tab-btn" data-tab="functions" type="button">Edge Functions</button>
+      <button class="tab-btn" data-tab="settings" type="button">⚙ Configurações</button>
     </div>
 
     <div class="tab-panel active" id="usersPanel">
@@ -996,6 +1285,52 @@ ${THEME_CSS}
         <tbody id="functionsBody"></tbody>
       </table>
     </div>
+
+    <div class="tab-panel" id="settingsPanel">
+      <div class="toolbar">
+        <div>
+          <h1>Configurações</h1>
+          <p class="sub">Backup automático do banco de dados e das Edge Functions.</p>
+        </div>
+      </div>
+      <div class="settings-card">
+        <h2>Backup</h2>
+        <div class="msg" id="backupMsg"></div>
+        <div class="backup-status" id="backupStatus"></div>
+
+        <label for="backupClientId">Google Client ID</label>
+        <input type="text" id="backupClientId" autocomplete="off" placeholder="xxxxxxxx.apps.googleusercontent.com">
+        <label for="backupClientSecret">Google Client Secret</label>
+        <input type="password" id="backupClientSecret" autocomplete="off" placeholder="cole o client secret">
+        <p class="hint">Crie em console.cloud.google.com (veja o passo a passo no README) - a chave fica salva só no servidor, nunca é mostrada de volta aqui.</p>
+
+        <div class="backup-connect-row">
+          <button type="button" class="btn" id="backupConnectBtn">Conectar ao Google Drive</button>
+          <button type="button" class="btn" id="backupDisconnectBtn" style="display:none;">Desconectar</button>
+        </div>
+
+        <label for="backupFolder">Pasta do Drive (cole o link ou o ID)</label>
+        <input type="text" id="backupFolder" autocomplete="off" placeholder="https://drive.google.com/drive/folders/...">
+
+        <label for="backupFrequency">Frequência</label>
+        <select id="backupFrequency">
+          <option value="6">A cada 6 horas</option>
+          <option value="12">A cada 12 horas</option>
+          <option value="24">Diariamente</option>
+          <option value="48">A cada 2 dias</option>
+          <option value="168">Semanalmente</option>
+        </select>
+
+        <label for="backupRetention">Retenção (quantos backups manter)</label>
+        <input type="number" id="backupRetention" min="1" step="1">
+
+        <div class="editor-actions">
+          <div class="spacer"></div>
+          <button type="button" class="btn" id="backupRunNowBtn">Rodar backup agora</button>
+          <button type="button" class="btn btn-primary" id="backupSaveBtn">Salvar</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="overlay" id="overlay">
@@ -1023,6 +1358,7 @@ ${THEME_CSS}
 
   <div class="overlay" id="fnOverlay">
     <div class="card editor-card">
+      <button type="button" class="close" id="fnCloseBtn" aria-label="Fechar">&times;</button>
       <h2 id="fnFormTitle">Nova função</h2>
       <div class="msg" id="fnFormMsg"></div>
       <label for="fn-name">Nome da função</label>
@@ -1156,7 +1492,11 @@ ${THEME_CSS}
 
     // --- Abas ---
     var tabButtons = document.querySelectorAll('.tab-btn');
-    var tabPanels = { users: document.getElementById('usersPanel'), functions: document.getElementById('functionsPanel') };
+    var tabPanels = {
+      users: document.getElementById('usersPanel'),
+      functions: document.getElementById('functionsPanel'),
+      settings: document.getElementById('settingsPanel'),
+    };
     var functionsLoaded = false;
     tabButtons.forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -1168,7 +1508,93 @@ ${THEME_CSS}
           functionsLoaded = true;
           loadFunctions();
         }
+        if (btn.dataset.tab === 'settings') {
+          loadBackupConfig();
+        }
       });
+    });
+
+    // --- Backup ---
+    function backupShowMsg(text, kind) {
+      var el = document.getElementById('backupMsg');
+      el.textContent = text;
+      el.className = 'msg ' + kind;
+      el.style.display = 'block';
+    }
+    function backupHideMsg() { document.getElementById('backupMsg').style.display = 'none'; }
+
+    function renderBackupConfig(cfg) {
+      document.getElementById('backupClientId').value = cfg.googleClientId || '';
+      document.getElementById('backupClientSecret').value = '';
+      document.getElementById('backupClientSecret').placeholder = cfg.hasClientSecret ? 'deixe em branco para manter o valor salvo' : 'cole o client secret';
+      document.getElementById('backupFolder').value = cfg.driveFolderId || '';
+      document.getElementById('backupFrequency').value = String(cfg.frequencyHours || 24);
+      document.getElementById('backupRetention').value = cfg.retentionCount || 7;
+
+      var statusEl = document.getElementById('backupStatus');
+      var connectBtn = document.getElementById('backupConnectBtn');
+      var disconnectBtn = document.getElementById('backupDisconnectBtn');
+      if (cfg.connected) {
+        statusEl.className = 'backup-status connected';
+        var lastRun = cfg.lastRunAt ? new Date(cfg.lastRunAt).toLocaleString('pt-BR') : 'nunca rodou ainda';
+        var lastStatus = cfg.lastRunStatus === 'error' ? ' - falhou: ' + (cfg.lastRunError || '') : cfg.lastRunStatus === 'ok' ? ' - ok' : '';
+        statusEl.innerHTML = '<span class="dot"></span><span>Conectado ao Google Drive. Último backup: ' + lastRun + lastStatus + '</span>';
+        connectBtn.style.display = 'none';
+        disconnectBtn.style.display = 'inline-block';
+      } else {
+        statusEl.className = 'backup-status disconnected';
+        statusEl.innerHTML = '<span class="dot"></span><span>Não conectado ao Google Drive.</span>';
+        connectBtn.style.display = 'inline-block';
+        disconnectBtn.style.display = 'none';
+      }
+    }
+
+    function loadBackupConfig() {
+      fetch('/admin/api/backup/config').then(function (r) { return r.json(); }).then(renderBackupConfig);
+    }
+
+    document.getElementById('backupSaveBtn').addEventListener('click', function () {
+      backupHideMsg();
+      var payload = {
+        googleClientId: document.getElementById('backupClientId').value.trim(),
+        googleClientSecret: document.getElementById('backupClientSecret').value,
+        driveFolderInput: document.getElementById('backupFolder').value.trim(),
+        frequencyHours: Number(document.getElementById('backupFrequency').value),
+        retentionCount: Number(document.getElementById('backupRetention').value),
+      };
+      fetch('/admin/api/backup/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { backupShowMsg(res.d.error || 'Não foi possível salvar.', 'error'); return; }
+          backupShowMsg('Salvo.', 'ok');
+          setTimeout(backupHideMsg, 1500);
+          renderBackupConfig(res.d);
+        });
+    });
+
+    document.getElementById('backupConnectBtn').addEventListener('click', function () {
+      window.location.href = '/admin/api/backup/oauth/start';
+    });
+
+    document.getElementById('backupDisconnectBtn').addEventListener('click', function (e) {
+      showConfirmPopover(e.currentTarget, 'Desconectar o Google Drive? Os backups agendados param até você reconectar.', function () {
+        fetch('/admin/api/backup/disconnect', { method: 'POST' }).then(function () { loadBackupConfig(); });
+      });
+    });
+
+    document.getElementById('backupRunNowBtn').addEventListener('click', function () {
+      backupHideMsg();
+      fetch('/admin/api/backup/run-now', { method: 'POST' })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { backupShowMsg(res.d.error || 'Não foi possível iniciar o backup.', 'error'); return; }
+          backupShowMsg('Backup iniciado - isso pode levar alguns minutos.', 'ok');
+          setTimeout(loadBackupConfig, 8000);
+        });
     });
 
     // --- Edge Functions ---
@@ -1342,6 +1768,7 @@ ${THEME_CSS}
 
     document.getElementById('newFnBtn').addEventListener('click', function () { openFunctionEditor(null); });
     document.getElementById('fnCancelBtn').addEventListener('click', closeFunctionEditor);
+    document.getElementById('fnCloseBtn').addEventListener('click', closeFunctionEditor);
 
     fnNameField.addEventListener('input', function () {
       if (!fnNameField.disabled) {
@@ -1469,6 +1896,20 @@ ${THEME_CSS}
       var functionsTabBtn = document.querySelector('.tab-btn[data-tab="functions"]');
       if (functionsTabBtn) functionsTabBtn.click();
       openFunctionEditor(deepLinkFn);
+    }
+
+    // Volta do fluxo OAuth do Google (Configurações > Backup).
+    var backupParams = new URLSearchParams(window.location.search);
+    if (backupParams.has('backupConnected') || backupParams.has('backupError')) {
+      var settingsTabBtn = document.querySelector('.tab-btn[data-tab="settings"]');
+      if (settingsTabBtn) settingsTabBtn.click();
+      if (backupParams.has('backupError')) {
+        backupShowMsg('Não foi possível conectar ao Google Drive: ' + backupParams.get('backupError'), 'error');
+      } else {
+        backupShowMsg('Conectado ao Google Drive.', 'ok');
+        setTimeout(backupHideMsg, 2500);
+      }
+      window.history.replaceState({}, '', window.location.pathname);
     }
   </script>
 </body>
@@ -2200,6 +2641,107 @@ function handleRequest(req, res) {
         sendJson(res, 200, { ok: true });
         return;
       }
+    }
+  }
+
+  // --- Backup (Configurações > Backup), também restrito a role === 'admin' ---
+  if (url.pathname.startsWith('/admin/api/backup')) {
+    const user = getSessionUser(req);
+    if (!isAdmin(user)) {
+      sendJson(res, user ? 403 : 401, { error: 'Acesso restrito a administradores.' });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/config' && req.method === 'GET') {
+      sendJson(res, 200, maskBackupConfig(readBackupConfig()));
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/config' && req.method === 'PUT') {
+      collectBody(req, (body) => {
+        let data;
+        try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+        const next = readBackupConfig();
+
+        if (typeof data.googleClientId === 'string') next.googleClientId = data.googleClientId.trim();
+        if (typeof data.googleClientSecret === 'string' && data.googleClientSecret.trim()) {
+          next.googleClientSecret = data.googleClientSecret.trim();
+        }
+        if (typeof data.driveFolderInput === 'string' && data.driveFolderInput.trim()) {
+          const id = extractDriveFolderId(data.driveFolderInput);
+          if (!id) { sendJson(res, 400, { error: 'Não entendi essa pasta do Drive - cole o link ou o ID da pasta.' }); return; }
+          next.driveFolderId = id;
+        }
+        const freq = Number(data.frequencyHours);
+        if (Number.isFinite(freq) && freq > 0) next.frequencyHours = freq;
+        const ret = Number(data.retentionCount);
+        if (Number.isFinite(ret) && ret >= 1) next.retentionCount = Math.floor(ret);
+
+        writeBackupConfig(next);
+        sendJson(res, 200, maskBackupConfig(next));
+      });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/oauth/start' && req.method === 'GET') {
+      const config = readBackupConfig();
+      if (!config.googleClientId || !config.googleClientSecret) {
+        sendJson(res, 400, { error: 'Salve o Client ID e o Client Secret antes de conectar.' });
+        return;
+      }
+      const state = crypto.randomBytes(16).toString('hex');
+      pendingOAuthStates.add(state);
+      const authUrl = buildGoogleAuthUrl(config.googleClientId, backupRedirectUri(req), state);
+      res.writeHead(302, { Location: authUrl });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/oauth/callback' && req.method === 'GET') {
+      const errParam = url.searchParams.get('error');
+      const state = url.searchParams.get('state');
+      const code = url.searchParams.get('code');
+
+      if (errParam) {
+        res.writeHead(302, { Location: `/admin?backupError=${encodeURIComponent(errParam)}` });
+        res.end();
+        return;
+      }
+      if (!state || !pendingOAuthStates.has(state)) {
+        res.writeHead(302, { Location: `/admin?backupError=${encodeURIComponent('Estado inválido - tente conectar de novo.')}` });
+        res.end();
+        return;
+      }
+      pendingOAuthStates.delete(state);
+
+      const config = readBackupConfig();
+      exchangeGoogleCode(config.googleClientId, config.googleClientSecret, code, backupRedirectUri(req))
+        .then((tokens) => {
+          writeBackupConfig({ ...readBackupConfig(), googleRefreshToken: tokens.refresh_token || config.googleRefreshToken });
+          res.writeHead(302, { Location: '/admin?backupConnected=1' });
+          res.end();
+        })
+        .catch((e) => {
+          res.writeHead(302, { Location: `/admin?backupError=${encodeURIComponent(e.message)}` });
+          res.end();
+        });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/disconnect' && req.method === 'POST') {
+      writeBackupConfig({ ...readBackupConfig(), googleRefreshToken: '' });
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/backup/run-now' && req.method === 'POST') {
+      if (backupRunning) { sendJson(res, 409, { error: 'Já tem um backup em andamento.' }); return; }
+      const config = readBackupConfig();
+      if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
+      if (!config.driveFolderId) { sendJson(res, 400, { error: 'Configure a pasta do Drive primeiro.' }); return; }
+      runBackupInBackground();
+      sendJson(res, 200, { started: true });
+      return;
     }
   }
 
