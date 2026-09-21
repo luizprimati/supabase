@@ -1,6 +1,6 @@
 # Backup automático (Postgres + Edge Functions) no Google Drive
 
-`Configurações → Backup` (em `/admin`) faz, na frequência que você
+A aba `Backup` (em `/admin`) faz, na frequência que você
 escolher:
 
 1. `pg_dump` do Postgres (formato `custom`, já comprimido) → `db-<data>.dump`.
@@ -54,7 +54,7 @@ uma única vez, um "OAuth Client" grátis no Google Cloud Console.
 
 ## Configurar em `/admin`
 
-1. `/admin` → aba **Configurações** → seção **Backup**.
+1. `/admin` → aba **Backup**.
 2. Cole o **Client ID** e o **Client Secret**, clique em **Salvar**.
 3. Clique em **Conectar ao Google Drive** - você é levado pra tela de
    consentimento do Google, aprova, e volta pro `/admin` já conectado.

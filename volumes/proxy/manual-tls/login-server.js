@@ -32,7 +32,7 @@ const FUNCTIONS_DIR = process.env.FUNCTIONS_DIR || '/app/functions';
 const COOKIE_NAME = 'supabase_studio_auth';
 const SESSION_HOURS = parseInt(process.env.AUTH_SESSION_HOURS || '168', 10);
 
-// Backup (Configurações > Backup em /admin) - dump do Postgres via
+// Backup (aba Backup em /admin) - dump do Postgres via
 // pg_dump (mesmas credenciais que os outros serviços do compose já
 // usam) + tar das Edge Functions, subidos pro Google Drive do usuário.
 const BACKUP_CONFIG_FILE = process.env.BACKUP_CONFIG_FILE || '/app/backup-config.json';
@@ -238,7 +238,7 @@ function deleteFunctionFile(name, relPath) {
   }
 }
 
-// --- Backup (Configurações > Backup em /admin) ---------------------------
+// --- Backup (aba Backup em /admin) ---------------------------
 // Faz dump do Postgres (pg_dump) + tar.gz das Edge Functions e sobe os
 // dois pro Google Drive do próprio usuário via OAuth (scope "drive.file",
 // restrito aos arquivos que este app cria - nunca vê o resto do Drive).
@@ -354,7 +354,7 @@ async function refreshGoogleAccessToken(clientId, clientSecret, refreshToken) {
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || data.error || 'Falha ao renovar o token do Google (reconecte o Drive em Configurações).');
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Falha ao renovar o token do Google (reconecte o Drive na aba Backup).');
   return data.access_token;
 }
 
@@ -1170,7 +1170,6 @@ ${THEME_CSS}
   }
   .fn-editor-main { flex: 1; min-width: 0; }
   .settings-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; max-width: 520px; }
-  .settings-card h2 { margin: 0 0 20px; font-size: 16px; color: var(--text-strong); }
   .backup-status {
     display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px;
     background: var(--bg); border: 1px solid var(--border); font-size: 13px; margin-bottom: 20px;
@@ -1255,7 +1254,7 @@ ${THEME_CSS}
     <div class="tabs">
       <button class="tab-btn active" data-tab="users" type="button">Usuários</button>
       <button class="tab-btn" data-tab="functions" type="button">Edge Functions</button>
-      <button class="tab-btn" data-tab="settings" type="button">⚙ Configurações</button>
+      <button class="tab-btn" data-tab="settings" type="button">Backup</button>
     </div>
 
     <div class="tab-panel active" id="usersPanel">
@@ -1289,12 +1288,11 @@ ${THEME_CSS}
     <div class="tab-panel" id="settingsPanel">
       <div class="toolbar">
         <div>
-          <h1>Configurações</h1>
+          <h1>Backup</h1>
           <p class="sub">Backup automático do banco de dados e das Edge Functions.</p>
         </div>
       </div>
       <div class="settings-card">
-        <h2>Backup</h2>
         <div class="msg" id="backupMsg"></div>
         <div class="backup-status" id="backupStatus"></div>
 
@@ -1898,7 +1896,7 @@ ${THEME_CSS}
       openFunctionEditor(deepLinkFn);
     }
 
-    // Volta do fluxo OAuth do Google (Configurações > Backup).
+    // Volta do fluxo OAuth do Google (aba Backup).
     var backupParams = new URLSearchParams(window.location.search);
     if (backupParams.has('backupConnected') || backupParams.has('backupError')) {
       var settingsTabBtn = document.querySelector('.tab-btn[data-tab="settings"]');
@@ -2644,7 +2642,7 @@ function handleRequest(req, res) {
     }
   }
 
-  // --- Backup (Configurações > Backup), também restrito a role === 'admin' ---
+  // --- Backup (aba Backup), também restrito a role === 'admin' ---
   if (url.pathname.startsWith('/admin/api/backup')) {
     const user = getSessionUser(req);
     if (!isAdmin(user)) {

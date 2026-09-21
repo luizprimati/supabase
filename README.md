@@ -192,7 +192,7 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   `index.ts` não pode ser excluído por ali (exclua a função inteira se
   quiser removê-lo).
 
-- **Configurações → Backup** — backup automático do banco (Postgres, via
+- **Backup** — backup automático do banco (Postgres, via
   `pg_dump`) e das Edge Functions (`.tar.gz`) pro Google Drive da sua
   própria conta. Veja o passo a passo completo (criar as credenciais no
   Google Cloud Console, conectar, escolher a pasta/frequência/retenção)
