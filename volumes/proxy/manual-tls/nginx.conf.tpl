@@ -55,6 +55,13 @@ server {
         proxy_pass http://login:8085;
     }
 
+    # Página pública de política de privacidade - exigida pelo Google
+    # Cloud Console pra publicar o app OAuth usado no Backup (Passo 5.1),
+    # sem precisar de sessão/login (igual /login).
+    location = /legal/privacidade {
+        proxy_pass http://login:8085;
+    }
+
     # CRUD de usuários (só para quem é "admin" - o próprio login-server.js
     # faz essa checagem e devolve 302/403 quando não pode).
     location /admin {

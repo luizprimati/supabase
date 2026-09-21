@@ -1101,6 +1101,52 @@ ${themeInitScript()}
 </html>`;
 }
 
+// Página pública exigida pelo Google Cloud Console pra publicar o app
+// OAuth usado no Backup (veja docs/backup-google-drive.md) - não usa
+// sessão nem tem nada sensível, só o texto que o Google pede.
+function renderPrivacyPage() {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+${themeInitScript()}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de privacidade - ${PROJECT_TITLE}</title>
+<style>${THEME_CSS}
+  .wrap { max-width: 640px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { color: var(--text-strong); font-size: 22px; margin-bottom: 4px; }
+  p, li { color: var(--text-muted); line-height: 1.6; font-size: 14px; }
+  h2 { color: var(--text-strong); font-size: 16px; margin: 28px 0 8px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Política de privacidade</h1>
+    <p>${PROJECT_TITLE} - painel administrativo self-hosted, de uso pessoal.</p>
+
+    <h2>Integração com o Google Drive (Backup)</h2>
+    <p>Este app usa a API do Google Drive só para o recurso de backup
+    automático do painel administrativo, com o escopo
+    <code>drive.file</code> - que dá acesso apenas aos arquivos que o
+    próprio app cria (o backup do banco de dados e das Edge Functions),
+    nunca ao restante do Google Drive do usuário.</p>
+    <ul>
+      <li>Nenhum dado é compartilhado, vendido ou repassado a terceiros.</li>
+      <li>Os arquivos de backup ficam só na pasta do Google Drive escolhida
+        pelo próprio usuário administrador.</li>
+      <li>A conexão pode ser desfeita a qualquer momento pelo próprio
+        painel administrativo (aba Backup → Desconectar) ou revogando o
+        acesso em <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
+    </ul>
+
+    <h2>Contato</h2>
+    <p>Dúvidas: <a href="mailto:luiz.primati@gmail.com">luiz.primati@gmail.com</a></p>
+  </div>
+</body>
+</html>`;
+}
+
 function renderAdminPage(currentUsername) {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -2366,6 +2412,12 @@ function handleRequest(req, res) {
   if (url.pathname === '/studio-inject.js' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
     res.end(STUDIO_INJECT_JS);
+    return;
+  }
+
+  if (url.pathname === '/legal/privacidade' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(renderPrivacyPage());
     return;
   }
 
