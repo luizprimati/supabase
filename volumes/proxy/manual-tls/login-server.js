@@ -139,6 +139,91 @@ function deleteFunctionDir(name) {
   fs.rmSync(path.join(FUNCTIONS_DIR, name), { recursive: true, force: true });
 }
 
+// Arquivos extras dentro da pasta de uma function (além do index.ts) - o
+// dispatcher (main/index.ts) já aponta pra pasta inteira, então o Deno
+// resolve imports relativos entre eles sem precisar de nada novo na
+// infra; isso só expõe criar/editar/excluir esses arquivos pelo /admin.
+const FUNCTION_FILE_PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
+
+function isValidRelFilePath(relPath) {
+  return typeof relPath === 'string' && relPath.length <= 200 && FUNCTION_FILE_PATH_RE.test(relPath);
+}
+
+// Resolve e confere que o caminho final não escapa da pasta da function
+// (defesa extra além da regex, contra qualquer link simbólico/edge case).
+function resolveFunctionFilePath(name, relPath) {
+  const rootDir = path.resolve(path.join(FUNCTIONS_DIR, name));
+  const fullPath = path.resolve(path.join(rootDir, relPath));
+  if (fullPath !== rootDir && !fullPath.startsWith(rootDir + path.sep)) {
+    throw new Error('Caminho inválido.');
+  }
+  return fullPath;
+}
+
+function listFunctionFiles(name) {
+  const rootDir = path.join(FUNCTIONS_DIR, name);
+  const results = [];
+  function walk(currentDir, prefix) {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(currentDir, entry.name), relPath);
+      } else if (entry.isFile() && !entry.name.endsWith('.tmp')) {
+        results.push(relPath);
+      }
+    }
+  }
+  walk(rootDir, '');
+  results.sort((a, b) => {
+    if (a === 'index.ts') return -1;
+    if (b === 'index.ts') return 1;
+    return a.localeCompare(b);
+  });
+  return results;
+}
+
+function readFunctionFile(name, relPath) {
+  try {
+    return fs.readFileSync(resolveFunctionFilePath(name, relPath), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// Mesmo padrão de escrita atômica (arquivo temporário + rename) do
+// writeFunctionCode, criando subpastas conforme necessário.
+function writeFunctionFile(name, relPath, code) {
+  const finalPath = resolveFunctionFilePath(name, relPath);
+  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+  const tmpPath = `${finalPath}.tmp`;
+  fs.writeFileSync(tmpPath, code);
+  fs.renameSync(tmpPath, finalPath);
+}
+
+function deleteFunctionFile(name, relPath) {
+  const fullPath = resolveFunctionFilePath(name, relPath);
+  fs.rmSync(fullPath, { force: true });
+
+  // Remove subpastas que ficaram vazias depois da exclusão, sem tocar na
+  // pasta raiz da function.
+  const rootDir = path.resolve(path.join(FUNCTIONS_DIR, name));
+  let dir = path.dirname(fullPath);
+  while (dir !== rootDir && dir.startsWith(rootDir + path.sep)) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      break;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -783,6 +868,34 @@ ${THEME_CSS}
   .editor-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
   .editor-actions .spacer { flex: 1; }
   .editor-actions .btn { padding: 10px 22px; }
+  /* Barra lateral de arquivos da function (só aparece editando uma já
+     existente - antes de salvar o index.ts pela 1a vez a pasta nem
+     existe no disco ainda, então não tem onde listar/criar arquivo). */
+  .editor-body { display: flex; gap: 16px; align-items: stretch; }
+  .fn-files-sidebar {
+    width: 180px; flex-shrink: 0; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); padding-right: 12px; margin-bottom: 16px;
+  }
+  .fn-files-list { flex: 1; overflow-y: auto; max-height: 456px; display: flex; flex-direction: column; gap: 2px; }
+  .fn-file-item { display: flex; align-items: center; justify-content: space-between; gap: 2px; border-radius: 6px; }
+  .fn-file-item.active { background: var(--bg); }
+  .fn-file-name {
+    flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 6px 8px;
+    font-size: 12px; font-family: ui-monospace, Menlo, monospace; color: var(--text-muted); cursor: pointer;
+    border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fn-file-item.active .fn-file-name { color: var(--text-strong); font-weight: 600; }
+  .fn-file-name:hover { color: var(--text-strong); }
+  .fn-file-del {
+    background: none; border: none; padding: 4px; margin-right: 4px; color: var(--text-muted); cursor: pointer;
+    border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .fn-file-del:hover { color: var(--danger-text); }
+  .fn-new-file-btn { padding: 6px 8px; font-size: 12px; margin-top: 6px; }
+  .fn-new-file-row input {
+    width: 100%; padding: 6px 8px; margin-top: 4px; font-size: 12px; font-family: ui-monospace, Menlo, monospace;
+  }
+  .fn-editor-main { flex: 1; min-width: 0; }
   .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
   .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
   table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -915,8 +1028,19 @@ ${THEME_CSS}
       <label for="fn-name">Nome da função</label>
       <input type="text" id="fn-name" autocomplete="off" placeholder="ex: minha-funcao">
       <p class="hint" id="fnNameHint">Letras minúsculas, números, "-" ou "_", começando com letra. Não pode ser alterado depois de criada.</p>
-      <label for="fn-code">Código (index.ts)</label>
-      <textarea id="fn-code"></textarea>
+      <div class="editor-body">
+        <div class="fn-files-sidebar" id="fnFilesSidebar" style="display:none;">
+          <div class="fn-files-list" id="fnFileList"></div>
+          <div class="fn-new-file-row" id="fnNewFileRow" style="display:none;">
+            <input type="text" id="fnNewFileInput" placeholder="ex: utils.ts">
+          </div>
+          <button type="button" class="btn fn-new-file-btn" id="fnNewFileBtn">+ Novo arquivo</button>
+        </div>
+        <div class="fn-editor-main">
+          <label for="fn-code" id="fnCodeLabel">Código (index.ts)</label>
+          <textarea id="fn-code"></textarea>
+        </div>
+      </div>
       <p class="fn-url" id="fnUrlHint"></p>
       <div class="editor-actions">
         <div class="spacer"></div>
@@ -1053,8 +1177,16 @@ ${THEME_CSS}
     var fnCodeArea = document.getElementById('fn-code');
     var fnFormMsg = document.getElementById('fnFormMsg');
     var fnUrlHint = document.getElementById('fnUrlHint');
+    var fnFilesSidebar = document.getElementById('fnFilesSidebar');
+    var fnFileList = document.getElementById('fnFileList');
+    var fnNewFileBtn = document.getElementById('fnNewFileBtn');
+    var fnNewFileRow = document.getElementById('fnNewFileRow');
+    var fnNewFileInput = document.getElementById('fnNewFileInput');
+    var fnCodeLabel = document.getElementById('fnCodeLabel');
     var editingFunctionName = null;
     var fnEditor = null;
+    var fnFiles = [];
+    var fnActiveFile = 'index.ts';
     var FUNCTION_TEMPLATE = ${JSON.stringify(FUNCTION_TEMPLATE)};
 
     function ensureEditor() {
@@ -1076,17 +1208,122 @@ ${THEME_CSS}
     }
     function fnHideMsg() { fnFormMsg.style.display = 'none'; }
 
+    // URL da API de arquivos de uma function (a raiz sempre é o index.ts,
+    // que também é o único arquivo que já existe assim que a function é
+    // criada - por isso a barra lateral só aparece editando uma existente).
+    function fnFileUrl(name, relPath) {
+      return '/admin/api/functions/' + encodeURIComponent(name) + '/files/' +
+        relPath.split('/').map(encodeURIComponent).join('/');
+    }
+
+    function renderFnFileList() {
+      fnFileList.innerHTML = '';
+      fnFiles.forEach(function (relPath) {
+        var row = document.createElement('div');
+        row.className = 'fn-file-item' + (relPath === fnActiveFile ? ' active' : '');
+
+        var nameBtn = document.createElement('button');
+        nameBtn.type = 'button';
+        nameBtn.className = 'fn-file-name';
+        nameBtn.textContent = relPath;
+        nameBtn.title = relPath;
+        nameBtn.addEventListener('click', function () { switchFnFile(relPath); });
+        row.appendChild(nameBtn);
+
+        if (relPath !== 'index.ts') {
+          var delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'fn-file-del';
+          delBtn.title = 'Excluir arquivo';
+          delBtn.setAttribute('aria-label', 'Excluir ' + relPath);
+          delBtn.innerHTML = TRASH_ICON;
+          delBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            showConfirmPopover(delBtn, 'Excluir o arquivo "' + relPath + '"?', function () {
+              fetch(fnFileUrl(editingFunctionName, relPath), { method: 'DELETE' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (res) {
+                  if (!res.ok) { fnShowMsg(res.d.error || 'Não foi possível excluir o arquivo.', 'error'); return; }
+                  fnFiles = fnFiles.filter(function (f) { return f !== relPath; });
+                  if (fnActiveFile === relPath) { switchFnFile('index.ts'); }
+                  else { renderFnFileList(); }
+                });
+            });
+          });
+          row.appendChild(delBtn);
+        }
+        fnFileList.appendChild(row);
+      });
+    }
+
+    function switchFnFile(relPath) {
+      fnActiveFile = relPath;
+      fnCodeLabel.textContent = 'Código (' + relPath + ')';
+      renderFnFileList();
+      setCode('');
+      fetch(fnFileUrl(editingFunctionName, relPath)).then(function (r) { return r.json(); }).then(function (d) {
+        setCode(d.code || '');
+        if (fnEditor) setTimeout(function () { fnEditor.refresh(); }, 10);
+      });
+    }
+
+    function loadFnFileList() {
+      fetch('/admin/api/functions/' + encodeURIComponent(editingFunctionName) + '/files')
+        .then(function (r) { return r.json(); })
+        .then(function (files) {
+          fnFiles = files;
+          renderFnFileList();
+        });
+    }
+
+    function confirmNewFnFile() {
+      var relPath = fnNewFileInput.value.trim();
+      if (!relPath) return;
+      if (fnFiles.indexOf(relPath) !== -1) { fnShowMsg('Já existe um arquivo com esse nome.', 'error'); return; }
+      fetch(fnFileUrl(editingFunctionName, relPath), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: '' }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { fnShowMsg(res.d.error || 'Não foi possível criar o arquivo.', 'error'); return; }
+          fnNewFileRow.style.display = 'none';
+          fnFiles.push(relPath);
+          switchFnFile(relPath);
+        });
+    }
+
+    fnNewFileBtn.addEventListener('click', function () {
+      fnNewFileRow.style.display = 'block';
+      fnNewFileInput.value = '';
+      fnNewFileInput.focus();
+    });
+    fnNewFileInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); confirmNewFnFile(); }
+      if (e.key === 'Escape') { fnNewFileRow.style.display = 'none'; }
+    });
+    fnNewFileInput.addEventListener('blur', function () {
+      setTimeout(function () { fnNewFileRow.style.display = 'none'; }, 150);
+    });
+
     function openFunctionEditor(name) {
       fnHideMsg();
       ensureEditor();
       editingFunctionName = name;
+      fnActiveFile = 'index.ts';
+      fnCodeLabel.textContent = 'Código (index.ts)';
       if (name) {
         document.getElementById('fnFormTitle').textContent = 'Editar ' + name;
         fnNameField.value = name;
         fnNameField.disabled = true;
         fnUrlHint.textContent = window.location.origin + '/functions/v1/' + name;
+        fnFilesSidebar.style.display = 'flex';
+        fnFiles = ['index.ts'];
+        renderFnFileList();
         setCode('');
-        fetch('/admin/api/functions/' + encodeURIComponent(name)).then(function (r) { return r.json(); }).then(function (d) {
+        loadFnFileList();
+        fetch(fnFileUrl(name, 'index.ts')).then(function (r) { return r.json(); }).then(function (d) {
           setCode(d.code || '');
         });
       } else {
@@ -1094,6 +1331,8 @@ ${THEME_CSS}
         fnNameField.value = '';
         fnNameField.disabled = false;
         fnUrlHint.textContent = '';
+        fnFilesSidebar.style.display = 'none';
+        fnFiles = [];
         setCode(FUNCTION_TEMPLATE);
       }
       fnOverlay.classList.add('open');
@@ -1114,7 +1353,8 @@ ${THEME_CSS}
       fnHideMsg();
       var name = (editingFunctionName || fnNameField.value.trim());
       if (!name) { fnShowMsg('Informe um nome para a função.', 'error'); return; }
-      fetch('/admin/api/functions/' + encodeURIComponent(name), {
+      var url = editingFunctionName ? fnFileUrl(name, fnActiveFile) : ('/admin/api/functions/' + encodeURIComponent(name));
+      fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: getCode() }),
@@ -1122,8 +1362,13 @@ ${THEME_CSS}
         .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
         .then(function (res) {
           if (!res.ok) { fnShowMsg(res.d.error || 'Não foi possível salvar.', 'error'); return; }
-          closeFunctionEditor();
-          loadFunctions();
+          if (editingFunctionName) {
+            fnShowMsg('Salvo.', 'ok');
+            setTimeout(fnHideMsg, 1500);
+          } else {
+            closeFunctionEditor();
+            loadFunctions();
+          }
         });
     });
 
@@ -1851,7 +2096,68 @@ function handleRequest(req, res) {
 
     const fnPrefix = '/admin/api/functions/';
     if (url.pathname.startsWith(fnPrefix)) {
-      const name = decodeURIComponent(url.pathname.slice(fnPrefix.length));
+      const rest = decodeURIComponent(url.pathname.slice(fnPrefix.length));
+      const filesMatch = rest.match(/^([^/]+)\/files(?:\/(.*))?$/);
+
+      if (filesMatch) {
+        const name = filesMatch[1];
+        const relPath = filesMatch[2] || '';
+        if (!isValidFunctionName(name)) { sendJson(res, 400, { error: 'Nome de função inválido.' }); return; }
+
+        if (relPath === '') {
+          if (req.method === 'GET') { sendJson(res, 200, listFunctionFiles(name)); return; }
+          sendJson(res, 404, { error: 'Caminho de arquivo não informado.' });
+          return;
+        }
+
+        if (!isValidRelFilePath(relPath)) { sendJson(res, 400, { error: 'Nome de arquivo inválido.' }); return; }
+
+        if (req.method === 'GET') {
+          const code = readFunctionFile(name, relPath);
+          if (code === null) { sendJson(res, 404, { error: 'Arquivo não encontrado.' }); return; }
+          sendJson(res, 200, { path: relPath, code });
+          return;
+        }
+
+        if (req.method === 'PUT') {
+          collectBody(req, (body) => {
+            let data;
+            try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+            const code = typeof data.code === 'string' ? data.code : '';
+            if (relPath === 'index.ts' && !code.trim()) {
+              sendJson(res, 400, { error: 'O código do index.ts não pode ficar vazio.' });
+              return;
+            }
+            try {
+              writeFunctionFile(name, relPath, code);
+            } catch (e) {
+              console.error(`Não foi possível gravar ${name}/${relPath}: ${e.message}`);
+              sendJson(res, 500, { error: 'Não foi possível salvar - a pasta de functions está gravável no container?' });
+              return;
+            }
+            sendJson(res, 200, { path: relPath });
+          });
+          return;
+        }
+
+        if (req.method === 'DELETE') {
+          if (relPath === 'index.ts') {
+            sendJson(res, 400, { error: 'Não é possível excluir o index.ts por aqui - exclua a função inteira se quiser removê-lo.' });
+            return;
+          }
+          try {
+            deleteFunctionFile(name, relPath);
+          } catch (e) {
+            sendJson(res, 500, { error: `Não foi possível excluir: ${e.message}` });
+            return;
+          }
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+        return;
+      }
+
+      const name = rest;
 
       if (req.method === 'GET') {
         if (!isValidFunctionName(name)) { sendJson(res, 400, { error: 'Nome de função inválido.' }); return; }
