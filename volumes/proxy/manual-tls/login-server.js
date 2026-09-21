@@ -323,8 +323,13 @@ function extractDriveFolderId(input) {
   return null;
 }
 
+// $host (usado no Host normal que o Nginx repassa) não inclui a porta -
+// só $http_host, mandado aqui como X-Forwarded-Host (mesma lição de
+// @login_redirect no nginx.conf.tpl), preserva o ":9443" da URL que o
+// cliente realmente usou.
 function backupRedirectUri(req) {
-  return `https://${req.headers.host}/admin/api/backup/oauth/callback`;
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `https://${host}/admin/api/backup/oauth/callback`;
 }
 
 function buildGoogleAuthUrl(clientId, redirectUri, state) {
