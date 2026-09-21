@@ -65,7 +65,16 @@ uma única vez, um "OAuth Client" grátis no Google Cloud Console.
 
 ## Configurar em `/admin`
 
-1. `/admin` → aba **Backup**.
+A aba **Backup** tem duas subabas: **Configurar** e **Gerenciar**.
+
+### Configurar
+
+Dentro de Configurar tem um seletor de destino (Google Drive / Azure
+Storage / AWS Storage) - só o Google Drive funciona por enquanto (é o
+destino padrão), os outros dois aparecem desabilitados como reserva pro
+futuro.
+
+1. `/admin` → aba **Backup** → **Configurar** → **Google Drive**.
 2. Cole o **Client ID**, o **Client Secret** e a **Google API Key**,
    clique em **Salvar**.
 3. Clique em **Conectar ao Google Drive** - você é levado pra tela de
@@ -82,6 +91,16 @@ uma única vez, um "OAuth Client" grátis no Google Cloud Console.
    frequência configurada - o botão fica desabilitado com "Backup em
    andamento..." enquanto roda, e mostra sucesso ou erro assim que
    termina (a tela verifica o progresso a cada poucos segundos sozinha).
+
+### Gerenciar
+
+A subaba **Gerenciar** lista as subpastas de backup (uma por rodada, com
+data/hora) dentro da pasta configurada. Clicar numa delas abre um
+navegador simples com os arquivos de dentro (`db.dump` e
+`edge-functions.tar.gz`), cada um com botão de **baixar** e de
+**excluir**; dá pra excluir a rodada inteira direto na lista, sem
+precisar abrir ela primeiro. Um "Backups" no topo (breadcrumb) volta pra
+lista de rodadas.
 
 Depois de configurado, o backup roda sozinho no fundo (uma checagem a
 cada 5 minutos decide se já passou tempo suficiente desde a última

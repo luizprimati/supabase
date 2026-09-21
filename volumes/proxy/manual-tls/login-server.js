@@ -384,6 +384,18 @@ async function refreshGoogleAccessToken(clientId, clientSecret, refreshToken) {
   return data.access_token;
 }
 
+// Padrão comum das rotas de Drive em /admin/api/backup/drive/* - renova
+// o access token e só então roda a operação; qualquer erro (sem conexão,
+// token expirado, chamada ao Drive) vira uma resposta 500 limpa em vez
+// de escapar pra fora sem resposta nenhuma.
+function withDriveAccessToken(res, handler) {
+  const config = readBackupConfig();
+  if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
+  refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken)
+    .then((accessToken) => handler(accessToken, config))
+    .catch((e) => { if (!res.headersSent) sendJson(res, 500, { error: e.message }); });
+}
+
 // Upload multipart (metadados JSON + conteúdo do arquivo numa só
 // requisição) - mais simples que o protocolo resumível e suficiente pro
 // tamanho normal de um dump/tar deste projeto; se falhar no meio, a
@@ -450,15 +462,39 @@ async function driveCreateFolder(accessToken, name, parentId) {
   return data;
 }
 
-async function driveListFolders(accessToken, parentId) {
-  const q = encodeURIComponent(`'${parentId}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder'`);
+// Base pra listar pastas de backup (retenção, aba Gerenciar) e arquivos
+// dentro de uma delas (aba Gerenciar) - já vem em ordem decrescente de
+// criação, mais recente primeiro.
+async function driveListChildren(accessToken, parentId, { foldersOnly } = {}) {
+  let q = `'${parentId}' in parents and trashed = false`;
+  if (foldersOnly) q += ` and mimeType = 'application/vnd.google-apps.folder'`;
   const res = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=createdTime&pageSize=1000`,
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,createdTime)&orderBy=createdTime desc&pageSize=1000`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'Falha ao listar as pastas de backup no Drive.');
+  if (!res.ok) throw new Error(data.error?.message || 'Falha ao listar itens do Drive.');
   return data.files || [];
+}
+
+function driveListFolders(accessToken, parentId) {
+  return driveListChildren(accessToken, parentId, { foldersOnly: true });
+}
+
+async function driveListFiles(accessToken, parentId) {
+  const children = await driveListChildren(accessToken, parentId);
+  return children.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder');
+}
+
+async function driveDownloadFile(accessToken, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error?.message || 'Falha ao baixar o arquivo do Drive.');
+  }
+  return Buffer.from(await res.arrayBuffer());
 }
 
 function execFileAsync(cmd, args, options) {
@@ -494,9 +530,9 @@ function backupFolderStamp(date) {
 // Mantém só as N subpastas (uma por rodada) mais recentes dentro da
 // pasta configurada - excluir a subpasta já leva os 2 arquivos junto.
 async function pruneOldBackups(accessToken, config) {
+  // driveListFolders já vem em ordem decrescente de criação.
   const folders = await driveListFolders(accessToken, config.driveFolderId);
-  const sorted = folders.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
-  const toDelete = sorted.slice(config.retentionCount);
+  const toDelete = folders.slice(config.retentionCount);
   for (const f of toDelete) {
     await driveDeleteFile(accessToken, f.id);
   }
@@ -1504,6 +1540,30 @@ ${THEME_CSS}
   .backup-status.connected .dot { background: var(--accent); }
   .backup-status.disconnected .dot { background: var(--text-muted); }
   .backup-connect-row { display: flex; gap: 10px; margin-bottom: 20px; }
+  .subtabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .subtab-btn {
+    padding: 8px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+    color: var(--text-muted); font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .subtab-btn.active { color: var(--text-strong); border-color: var(--accent); background: var(--bg-card); }
+  .subtab-panel { display: none; }
+  .subtab-panel.active { display: block; }
+  .provider-row { display: flex; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .provider-btn {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px;
+    background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .provider-btn:disabled { cursor: not-allowed; opacity: .5; }
+  .provider-btn.active { border-color: var(--accent); color: var(--text-strong); }
+  .provider-badge {
+    background: rgba(62,207,142,.15); color: var(--accent); font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 999px; margin-left: 4px;
+  }
+  .backup-breadcrumb { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); }
+  .backup-breadcrumb button { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0; }
+  #backupBrowserCard { max-width: 100%; }
+  #backupBrowserCard table { max-width: 720px; }
   .wrap h1 { color: var(--text-strong); font-size: 24px; margin: 0 0 4px; }
   .wrap p.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 28px; }
   table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -1618,51 +1678,87 @@ ${THEME_CSS}
           <p class="sub">Backup automático do banco de dados e das Edge Functions.</p>
         </div>
       </div>
-      <div class="settings-card">
-        <div class="msg" id="backupMsg"></div>
-        <div class="backup-status" id="backupStatus"></div>
 
-        <label for="backupClientId">Google Client ID</label>
-        <input type="text" id="backupClientId" autocomplete="off" placeholder="xxxxxxxx.apps.googleusercontent.com">
-        <label for="backupClientSecret">Google Client Secret</label>
-        <input type="password" id="backupClientSecret" autocomplete="off" placeholder="cole o client secret">
-        <p class="hint">Crie em console.cloud.google.com (veja o passo a passo no README) - a chave fica salva só no servidor, nunca é mostrada de volta aqui.</p>
+      <div class="subtabs">
+        <button class="subtab-btn active" data-subtab="configure" type="button">Configurar</button>
+        <button class="subtab-btn" data-subtab="manage" type="button">Gerenciar</button>
+      </div>
 
-        <label for="backupApiKey">Google API Key (só para o seletor de pastas)</label>
-        <input type="text" id="backupApiKey" autocomplete="off" placeholder="AIza...">
-        <p class="hint">Também criada em console.cloud.google.com - precisa ativar a "Google Picker API". Essa chave roda no navegador (restrinja por domínio lá no Cloud Console).</p>
-
-        <div class="backup-connect-row">
-          <button type="button" class="btn" id="backupConnectBtn">Conectar ao Google Drive</button>
-          <button type="button" class="btn" id="backupDisconnectBtn" style="display:none;">Desconectar</button>
+      <div class="subtab-panel active" id="backupConfigurePanel">
+        <div class="provider-row">
+          <button type="button" class="provider-btn active" data-provider="google-drive">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#0F9D58" d="M8.5 3h7l7.5 13-3.5 6h-15z"/><path fill="#FFCF63" d="M8.5 3l-7.5 13 3.5 6h4l-7.5-13z"/><path fill="#4285F4" d="M12.5 16l-3.5 6h11l3.5-6z"/></svg>
+            <span>Google Drive</span>
+            <span class="provider-badge">Padrão</span>
+          </button>
+          <button type="button" class="provider-btn" data-provider="azure" disabled title="Em breve">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#0072C6" d="M7.5 2 2 19.5h6.5L14 8z"/><path fill="#0072C6" d="M13 2 6 22h16L15 9z" opacity=".55"/></svg>
+            <span>Azure Storage</span>
+          </button>
+          <button type="button" class="provider-btn" data-provider="aws" disabled title="Em breve">
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#FF9900" d="M4 15c4 3 12 3 16 0v2c-4 3-12 3-16 0z"/><circle cx="12" cy="10" r="7" fill="#232F3E"/></svg>
+            <span>AWS Storage</span>
+          </button>
         </div>
+        <p class="hint">Google Drive é o local padrão de backup agora - outros destinos (Azure, AWS) chegam depois.</p>
 
-        <label for="backupFolder">Pasta do Drive</label>
-        <input type="text" id="backupFolder" autocomplete="off" placeholder="Nenhuma pasta selecionada - use os botões abaixo ou cole um link/ID">
-        <div class="backup-connect-row">
-          <button type="button" class="btn" id="backupPickFolderBtn">Escolher pasta no Drive</button>
-          <button type="button" class="btn" id="backupNewFolderBtn">+ Criar nova pasta</button>
+        <div class="settings-card" id="googleDriveProviderPanel">
+          <div class="msg" id="backupMsg"></div>
+          <div class="backup-status" id="backupStatus"></div>
+
+          <label for="backupClientId">Google Client ID</label>
+          <input type="text" id="backupClientId" autocomplete="off" placeholder="xxxxxxxx.apps.googleusercontent.com">
+          <label for="backupClientSecret">Google Client Secret</label>
+          <input type="password" id="backupClientSecret" autocomplete="off" placeholder="cole o client secret">
+          <p class="hint">Crie em console.cloud.google.com (veja o passo a passo no README) - a chave fica salva só no servidor, nunca é mostrada de volta aqui.</p>
+
+          <label for="backupApiKey">Google API Key (só para o seletor de pastas)</label>
+          <input type="text" id="backupApiKey" autocomplete="off" placeholder="AIza...">
+          <p class="hint">Também criada em console.cloud.google.com - precisa ativar a "Google Picker API". Essa chave roda no navegador (restrinja por domínio lá no Cloud Console).</p>
+
+          <div class="backup-connect-row">
+            <button type="button" class="btn" id="backupConnectBtn">Conectar ao Google Drive</button>
+            <button type="button" class="btn" id="backupDisconnectBtn" style="display:none;">Desconectar</button>
+          </div>
+
+          <label for="backupFolder">Pasta do Drive</label>
+          <input type="text" id="backupFolder" autocomplete="off" placeholder="Nenhuma pasta selecionada - use os botões abaixo ou cole um link/ID">
+          <div class="backup-connect-row">
+            <button type="button" class="btn" id="backupPickFolderBtn">Escolher pasta no Drive</button>
+            <button type="button" class="btn" id="backupNewFolderBtn">+ Criar nova pasta</button>
+          </div>
+          <div class="fn-new-file-row" id="backupNewFolderRow" style="display:none;">
+            <input type="text" id="backupNewFolderInput" placeholder="Nome da nova pasta">
+          </div>
+
+          <label for="backupFrequency">Frequência</label>
+          <select id="backupFrequency">
+            <option value="6">A cada 6 horas</option>
+            <option value="12">A cada 12 horas</option>
+            <option value="24">Diariamente</option>
+            <option value="48">A cada 2 dias</option>
+            <option value="168">Semanalmente</option>
+          </select>
+
+          <label for="backupRetention">Retenção (quantos backups manter)</label>
+          <input type="number" id="backupRetention" min="1" step="1">
+
+          <div class="editor-actions">
+            <div class="spacer"></div>
+            <button type="button" class="btn" id="backupRunNowBtn">Rodar backup agora</button>
+            <button type="button" class="btn btn-primary" id="backupSaveBtn">Salvar</button>
+          </div>
         </div>
-        <div class="fn-new-file-row" id="backupNewFolderRow" style="display:none;">
-          <input type="text" id="backupNewFolderInput" placeholder="Nome da nova pasta">
-        </div>
+      </div>
 
-        <label for="backupFrequency">Frequência</label>
-        <select id="backupFrequency">
-          <option value="6">A cada 6 horas</option>
-          <option value="12">A cada 12 horas</option>
-          <option value="24">Diariamente</option>
-          <option value="48">A cada 2 dias</option>
-          <option value="168">Semanalmente</option>
-        </select>
-
-        <label for="backupRetention">Retenção (quantos backups manter)</label>
-        <input type="number" id="backupRetention" min="1" step="1">
-
-        <div class="editor-actions">
-          <div class="spacer"></div>
-          <button type="button" class="btn" id="backupRunNowBtn">Rodar backup agora</button>
-          <button type="button" class="btn btn-primary" id="backupSaveBtn">Salvar</button>
+      <div class="subtab-panel" id="backupManagePanel">
+        <div class="settings-card" id="backupBrowserCard">
+          <div class="msg" id="backupManageMsg"></div>
+          <div class="backup-breadcrumb" id="backupBreadcrumb"></div>
+          <table>
+            <thead id="backupBrowserHead"></thead>
+            <tbody id="backupBrowserBody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -2031,6 +2127,187 @@ ${THEME_CSS}
         });
     });
 
+    // --- Backup: subabas Configurar/Gerenciar ---
+    var subtabButtons = document.querySelectorAll('.subtab-btn');
+    var subtabPanels = {
+      configure: document.getElementById('backupConfigurePanel'),
+      manage: document.getElementById('backupManagePanel'),
+    };
+    subtabButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        subtabButtons.forEach(function (b) { b.classList.remove('active'); });
+        Object.keys(subtabPanels).forEach(function (k) { subtabPanels[k].classList.remove('active'); });
+        btn.classList.add('active');
+        subtabPanels[btn.dataset.subtab].classList.add('active');
+        if (btn.dataset.subtab === 'manage') { loadBackupManageRoot(); }
+      });
+    });
+
+    // --- Backup: seletor de provedor (só Google Drive funciona por ora) ---
+    document.querySelectorAll('.provider-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        document.querySelectorAll('.provider-btn').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+      });
+    });
+
+    // --- Backup: navegador de pastas (aba Gerenciar) ---
+    var backupBrowserFolder = null; // null = lista de rodadas; senão { id, name } da rodada aberta
+
+    function backupManageShowMsg(text, kind) {
+      var el = document.getElementById('backupManageMsg');
+      el.textContent = text;
+      el.className = 'msg ' + kind;
+      el.style.display = 'block';
+    }
+    function backupManageHideMsg() { document.getElementById('backupManageMsg').style.display = 'none'; }
+
+    // Sem regex de propósito: "\d" dentro do template literal do
+    // renderAdminPage vira "d" de verdade quando o HTML é montado no
+    // servidor (\d não é um escape especial de string/template literal
+    // em JS, então o backslash some) - já pegou esse projeto antes com
+    // sub_filter do Nginx, mesma família de bug. Fatiar string evita o
+    // problema de vez.
+    function formatBackupFolderName(name) {
+      if (!name || name.length !== 12) return name;
+      var year = name.slice(0, 4), month = name.slice(4, 6), day = name.slice(6, 8);
+      var hour = name.slice(8, 10), minute = name.slice(10, 12);
+      return day + '/' + month + '/' + year + ' ' + hour + ':' + minute;
+    }
+
+    function formatBytes(bytes) {
+      bytes = Number(bytes) || 0;
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function renderBackupBreadcrumb() {
+      var el = document.getElementById('backupBreadcrumb');
+      el.innerHTML = '';
+      var rootBtn = document.createElement('button');
+      rootBtn.type = 'button';
+      rootBtn.textContent = 'Backups';
+      rootBtn.addEventListener('click', function () { loadBackupManageRoot(); });
+      el.appendChild(rootBtn);
+      if (backupBrowserFolder) {
+        var sep = document.createElement('span');
+        sep.textContent = '/';
+        el.appendChild(sep);
+        var current = document.createElement('span');
+        current.textContent = formatBackupFolderName(backupBrowserFolder.name);
+        el.appendChild(current);
+      }
+    }
+
+    function loadBackupManageRoot() {
+      backupBrowserFolder = null;
+      backupManageHideMsg();
+      renderBackupBreadcrumb();
+      document.getElementById('backupBrowserHead').innerHTML = '<tr><th>Data/hora</th><th></th></tr>';
+      var body = document.getElementById('backupBrowserBody');
+      body.innerHTML = '<tr><td colspan="2">Carregando...</td></tr>';
+      fetch('/admin/api/backup/drive/backups').then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+        if (!res.ok) { body.innerHTML = ''; backupManageShowMsg(res.d.error || 'Não foi possível listar os backups.', 'error'); return; }
+        body.innerHTML = '';
+        if (!res.d.length) { body.innerHTML = '<tr><td colspan="2">Nenhum backup ainda.</td></tr>'; return; }
+        res.d.forEach(function (folder) {
+          var tr = document.createElement('tr');
+
+          var tdName = document.createElement('td');
+          var openBtn = document.createElement('button');
+          openBtn.type = 'button';
+          openBtn.className = 'btn';
+          openBtn.style.padding = '4px 10px';
+          openBtn.style.fontSize = '13px';
+          openBtn.textContent = formatBackupFolderName(folder.name);
+          openBtn.addEventListener('click', function () { openBackupFolder(folder); });
+          tdName.appendChild(openBtn);
+
+          var tdActions = document.createElement('td');
+          var delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'icon-only danger';
+          delBtn.title = 'Excluir backup';
+          delBtn.innerHTML = TRASH_ICON;
+          delBtn.addEventListener('click', function () {
+            showConfirmPopover(delBtn, 'Excluir todo o backup de ' + formatBackupFolderName(folder.name) + '? Essa ação não pode ser desfeita.', function () {
+              fetch('/admin/api/backup/drive/item?id=' + encodeURIComponent(folder.id), { method: 'DELETE' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (res2) {
+                  if (!res2.ok) { backupManageShowMsg(res2.d.error || 'Não foi possível excluir.', 'error'); return; }
+                  loadBackupManageRoot();
+                });
+            });
+          });
+          tdActions.appendChild(delBtn);
+
+          tr.appendChild(tdName);
+          tr.appendChild(tdActions);
+          body.appendChild(tr);
+        });
+      });
+    }
+
+    function openBackupFolder(folder) {
+      backupBrowserFolder = folder;
+      backupManageHideMsg();
+      renderBackupBreadcrumb();
+      document.getElementById('backupBrowserHead').innerHTML = '<tr><th>Arquivo</th><th>Tamanho</th><th></th></tr>';
+      var body = document.getElementById('backupBrowserBody');
+      body.innerHTML = '<tr><td colspan="3">Carregando...</td></tr>';
+      fetch('/admin/api/backup/drive/files?folderId=' + encodeURIComponent(folder.id)).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
+        if (!res.ok) { body.innerHTML = ''; backupManageShowMsg(res.d.error || 'Não foi possível listar os arquivos.', 'error'); return; }
+        body.innerHTML = '';
+        if (!res.d.length) { body.innerHTML = '<tr><td colspan="3">Pasta vazia.</td></tr>'; return; }
+        res.d.forEach(function (file) {
+          var tr = document.createElement('tr');
+
+          var tdName = document.createElement('td');
+          tdName.textContent = file.name;
+
+          var tdSize = document.createElement('td');
+          tdSize.textContent = formatBytes(file.size);
+
+          var tdActions = document.createElement('td');
+          var actions = document.createElement('div');
+          actions.className = 'row-actions';
+
+          var downloadLink = document.createElement('a');
+          downloadLink.className = 'icon-only';
+          downloadLink.title = 'Baixar';
+          downloadLink.setAttribute('aria-label', 'Baixar ' + file.name);
+          downloadLink.href = '/admin/api/backup/drive/download?fileId=' + encodeURIComponent(file.id) + '&name=' + encodeURIComponent(file.name);
+          downloadLink.innerHTML = DOWNLOAD_ICON;
+          actions.appendChild(downloadLink);
+
+          var delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'icon-only danger';
+          delBtn.title = 'Excluir arquivo';
+          delBtn.innerHTML = TRASH_ICON;
+          delBtn.addEventListener('click', function () {
+            showConfirmPopover(delBtn, 'Excluir o arquivo "' + file.name + '"?', function () {
+              fetch('/admin/api/backup/drive/item?id=' + encodeURIComponent(file.id), { method: 'DELETE' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (res2) {
+                  if (!res2.ok) { backupManageShowMsg(res2.d.error || 'Não foi possível excluir.', 'error'); return; }
+                  openBackupFolder(folder);
+                });
+            });
+          });
+          actions.appendChild(delBtn);
+
+          tdActions.appendChild(actions);
+          tr.appendChild(tdName);
+          tr.appendChild(tdSize);
+          tr.appendChild(tdActions);
+          body.appendChild(tr);
+        });
+      });
+    }
+
     // --- Edge Functions ---
     var fnOverlay = document.getElementById('fnOverlay');
     var fnNameField = document.getElementById('fn-name');
@@ -2235,6 +2512,7 @@ ${THEME_CSS}
 
     var PENCIL_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>';
     var TRASH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
+    var DOWNLOAD_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
 
     // Popover de confirmação próprio (em vez do confirm() nativo do
     // navegador), ancorado perto do botão que abriu ele.
@@ -3173,11 +3451,7 @@ function handleRequest(req, res) {
     // navegador do admin (escolher/navegar pastas do Drive) - nunca é
     // persistido, só passa por essa resposta.
     if (url.pathname === '/admin/api/backup/drive/access-token' && req.method === 'GET') {
-      const config = readBackupConfig();
-      if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
-      refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken)
-        .then((accessToken) => sendJson(res, 200, { accessToken }))
-        .catch((e) => sendJson(res, 500, { error: e.message }));
+      withDriveAccessToken(res, (accessToken) => sendJson(res, 200, { accessToken }));
       return;
     }
 
@@ -3185,18 +3459,66 @@ function handleRequest(req, res) {
     // Drive (é só pra escolher o destino dos backups, não precisa
     // navegar/criar em subpastas específicas).
     if (url.pathname === '/admin/api/backup/drive/create-folder' && req.method === 'POST') {
-      const config = readBackupConfig();
-      if (!config.googleRefreshToken) { sendJson(res, 400, { error: 'Conecte o Google Drive primeiro.' }); return; }
       collectBody(req, (body) => {
         let data;
         try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
         const name = typeof data.name === 'string' ? data.name.trim() : '';
         if (!name) { sendJson(res, 400, { error: 'Informe um nome para a pasta.' }); return; }
-        refreshGoogleAccessToken(config.googleClientId, config.googleClientSecret, config.googleRefreshToken)
-          .then((accessToken) => driveCreateFolder(accessToken, name))
-          .then((folder) => sendJson(res, 200, folder))
-          .catch((e) => sendJson(res, 500, { error: e.message }));
+        withDriveAccessToken(res, (accessToken) =>
+          driveCreateFolder(accessToken, name).then((folder) => sendJson(res, 200, folder))
+        );
       });
+      return;
+    }
+
+    // Aba Gerenciar: lista as subpastas de backup (uma por rodada) dentro
+    // da pasta configurada.
+    if (url.pathname === '/admin/api/backup/drive/backups' && req.method === 'GET') {
+      const config = readBackupConfig();
+      if (!config.driveFolderId) { sendJson(res, 400, { error: 'Configure a pasta do Drive primeiro.' }); return; }
+      withDriveAccessToken(res, (accessToken) =>
+        driveListFolders(accessToken, config.driveFolderId).then((folders) => sendJson(res, 200, folders))
+      );
+      return;
+    }
+
+    // Aba Gerenciar: lista os arquivos dentro de uma subpasta de backup.
+    if (url.pathname === '/admin/api/backup/drive/files' && req.method === 'GET') {
+      const folderId = url.searchParams.get('folderId');
+      if (!folderId) { sendJson(res, 400, { error: 'folderId não informado.' }); return; }
+      withDriveAccessToken(res, (accessToken) =>
+        driveListFiles(accessToken, folderId).then((files) => sendJson(res, 200, files))
+      );
+      return;
+    }
+
+    // Aba Gerenciar: baixa um arquivo (db.dump/edge-functions.tar.gz) de
+    // dentro de uma subpasta de backup.
+    if (url.pathname === '/admin/api/backup/drive/download' && req.method === 'GET') {
+      const fileId = url.searchParams.get('fileId');
+      const name = url.searchParams.get('name') || 'backup';
+      if (!fileId) { sendJson(res, 400, { error: 'fileId não informado.' }); return; }
+      withDriveAccessToken(res, (accessToken) =>
+        driveDownloadFile(accessToken, fileId).then((buffer) => {
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${name.replace(/[^A-Za-z0-9_.-]/g, '_')}"`,
+            'Content-Length': buffer.length,
+          });
+          res.end(buffer);
+        })
+      );
+      return;
+    }
+
+    // Aba Gerenciar: exclui um arquivo OU uma subpasta de backup inteira
+    // (excluir a pasta já leva os arquivos de dentro junto).
+    if (url.pathname === '/admin/api/backup/drive/item' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id');
+      if (!id) { sendJson(res, 400, { error: 'id não informado.' }); return; }
+      withDriveAccessToken(res, (accessToken) =>
+        driveDeleteFile(accessToken, id).then(() => sendJson(res, 200, { ok: true }))
+      );
       return;
     }
 
