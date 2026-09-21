@@ -1108,41 +1108,261 @@ function renderPrivacyPage() {
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-${themeInitScript()}
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Política de privacidade - ${PROJECT_TITLE}</title>
-<style>${THEME_CSS}
-  .wrap { max-width: 640px; margin: 0 auto; padding: 48px 24px 80px; }
-  h1 { color: var(--text-strong); font-size: 22px; margin-bottom: 4px; }
-  p, li { color: var(--text-muted); line-height: 1.6; font-size: 14px; }
-  h2 { color: var(--text-strong); font-size: 16px; margin: 28px 0 8px; }
-  a { color: var(--accent); }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="index, follow">
+  <meta name="description" content="Política de Privacidade do painel administrativo self-hosted de ${PROJECT_TITLE}.">
+  <title>Política de Privacidade | ${PROJECT_TITLE}</title>
+
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --max-width: 860px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+    }
+
+    .container {
+      width: min(calc(100% - 32px), var(--max-width));
+      margin: 48px auto;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 40px;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+    }
+
+    header {
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1, h2 {
+      line-height: 1.25;
+      color: #111827;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 5vw, 2.8rem);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      margin-top: 34px;
+      margin-bottom: 12px;
+      font-size: 1.35rem;
+    }
+
+    p {
+      margin: 0 0 16px;
+    }
+
+    ul {
+      padding-left: 22px;
+      margin: 12px 0 18px;
+    }
+
+    li {
+      margin-bottom: 10px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      background: #f3f4f6;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-size: 0.95em;
+    }
+
+    .notice {
+      margin: 22px 0;
+      padding: 18px 20px;
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    footer {
+      margin-top: 36px;
+      padding-top: 22px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        margin: 20px auto;
+      }
+
+      .card {
+        padding: 26px 20px;
+        border-radius: 14px;
+      }
+    }
+  </style>
 </head>
+
 <body>
-  <div class="wrap">
-    <h1>Política de privacidade</h1>
-    <p>${PROJECT_TITLE} - painel administrativo self-hosted, de uso pessoal.</p>
+  <main class="container">
+    <article class="card">
+      <header>
+        <h1>Política de Privacidade</h1>
+        <p class="meta">${PROJECT_TITLE} — painel administrativo self-hosted, de uso pessoal.</p>
+      </header>
 
-    <h2>Integração com o Google Drive (Backup)</h2>
-    <p>Este app usa a API do Google Drive só para o recurso de backup
-    automático do painel administrativo, com o escopo
-    <code>drive.file</code> - que dá acesso apenas aos arquivos que o
-    próprio app cria (o backup do banco de dados e das Edge Functions),
-    nunca ao restante do Google Drive do usuário.</p>
-    <ul>
-      <li>Nenhum dado é compartilhado, vendido ou repassado a terceiros.</li>
-      <li>Os arquivos de backup ficam só na pasta do Google Drive escolhida
-        pelo próprio usuário administrador.</li>
-      <li>A conexão pode ser desfeita a qualquer momento pelo próprio
-        painel administrativo (aba Backup → Desconectar) ou revogando o
-        acesso em <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
-    </ul>
+      <section>
+        <h2>1. Sobre esta aplicação</h2>
+        <p>
+          Este painel administrativo é uma aplicação self-hosted utilizada para fins pessoais e administrativos.
+          Esta Política de Privacidade explica, de forma clara e objetiva, como funciona a integração do painel
+          com o Google Drive para realização de backups.
+        </p>
+      </section>
 
-    <h2>Contato</h2>
-    <p>Dúvidas: <a href="mailto:luiz.primati@gmail.com">luiz.primati@gmail.com</a></p>
-  </div>
+      <section>
+        <h2>2. Integração com o Google Drive</h2>
+        <p>
+          O painel utiliza a API do Google Drive exclusivamente para o recurso de backup automático.
+        </p>
+
+        <div class="notice">
+          A integração utiliza o escopo <code>drive.file</code>, que permite acesso somente aos arquivos
+          criados ou utilizados pelo próprio aplicativo. O painel não possui acesso geral aos demais arquivos
+          armazenados no Google Drive do usuário.
+        </div>
+
+        <p>Os arquivos gerados pelo sistema podem incluir, entre outros:</p>
+
+        <ul>
+          <li>backup do banco de dados;</li>
+          <li>backup das Edge Functions utilizadas pelo painel.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>3. Finalidade do acesso</h2>
+        <p>
+          O acesso ao Google Drive é utilizado apenas para criar, armazenar e gerenciar os arquivos de backup
+          produzidos pelo próprio painel administrativo.
+        </p>
+
+        <p>
+          A integração não é utilizada para acessar documentos pessoais, fotografias, planilhas ou quaisquer
+          outros arquivos que não estejam relacionados ao backup criado pelo aplicativo.
+        </p>
+      </section>
+
+      <section>
+        <h2>4. Compartilhamento de dados</h2>
+        <p>
+          Nenhum dado obtido por meio desta aplicação é vendido, comercializado, compartilhado ou repassado
+          a terceiros para fins publicitários, comerciais ou de perfilamento.
+        </p>
+      </section>
+
+      <section>
+        <h2>5. Armazenamento dos backups</h2>
+        <p>
+          Os arquivos de backup permanecem armazenados somente na pasta do Google Drive selecionada pelo
+          próprio usuário administrador.
+        </p>
+      </section>
+
+      <section>
+        <h2>6. Revogação do acesso</h2>
+        <p>
+          A conexão com o Google Drive pode ser interrompida a qualquer momento.
+        </p>
+
+        <ul>
+          <li>
+            Pelo próprio painel administrativo, na opção
+            <strong>Backup → Desconectar</strong>.
+          </li>
+          <li>
+            Diretamente pela conta Google, na página de permissões:
+            <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">
+              myaccount.google.com/permissions
+            </a>.
+          </li>
+        </ul>
+
+        <p>
+          Ao revogar a autorização, o painel deixa de ter acesso aos recursos concedidos pela integração.
+        </p>
+      </section>
+
+      <section>
+        <h2>7. Segurança e controle</h2>
+        <p>
+          O uso da integração com o Google Drive é limitado à finalidade de backup do painel administrativo.
+          O usuário administrador mantém o controle sobre a conexão e pode revogar o acesso sempre que desejar.
+        </p>
+      </section>
+
+      <section>
+        <h2>8. Alterações nesta política</h2>
+        <p>
+          Esta Política de Privacidade poderá ser atualizada caso o funcionamento da aplicação ou da integração
+          com o Google Drive seja alterado. A versão mais recente estará sempre disponível nesta página.
+        </p>
+      </section>
+
+      <section>
+        <h2>9. Contato</h2>
+        <p>
+          Em caso de dúvidas sobre esta Política de Privacidade ou sobre o funcionamento da integração com o
+          Google Drive, entre em contato pelo e-mail:
+          <a href="mailto:luiz.primati@gmail.com">luiz.primati@gmail.com</a>.
+        </p>
+      </section>
+
+      <footer>
+        <p>Última atualização: setembro de 2026.</p>
+      </footer>
+    </article>
+  </main>
 </body>
 </html>`;
 }
