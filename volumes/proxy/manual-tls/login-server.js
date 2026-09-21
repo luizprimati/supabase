@@ -1946,15 +1946,13 @@ ${THEME_CSS}
       fetch('/admin/api/backup/drive/access-token').then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }).then(function (res) {
         if (!res.ok) { backupShowMsg(res.d.error || 'Conecte o Google Drive primeiro.', 'error'); return; }
         loadGooglePicker(function () {
-          // setIncludeFolders já é suficiente pra pasta aparecer navegável
-          // e escolhível pelo botão "Selecionar" do próprio diálogo -
-          // setSelectFolderEnum não existe na versão do Picker carregada
-          // (derrubava o clique inteiro antes de abrir a janela), então só
-          // chama se realmente existir.
-          var view = new google.picker.DocsView(google.picker.ViewId.FOLDERS).setIncludeFolders(true);
-          if (typeof view.setSelectFolderEnum === 'function') {
-            view.setSelectFolderEnum(google.picker.DocsViewMode.LIST);
-          }
+          // setSelectFolderEnabled(true) é o que faz uma pasta virar
+          // selecionável (habilita o botão "Selecionar" ao clicar nela,
+          // em vez de só navegar pra dentro) - o nome certo do método,
+          // confirmado na documentação oficial (não é "setSelectFolderEnum").
+          var view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+            .setIncludeFolders(true)
+            .setSelectFolderEnabled(true);
           var picker = new google.picker.PickerBuilder()
             .addView(view)
             .setOAuthToken(res.d.accessToken)
