@@ -612,9 +612,29 @@ async function grantSchemaAccess(schema) {
 // caminhos relativos do compose (./volumes/...) resolverem certo contra o
 // Docker do HOST, que é quem realmente cria os containers através do
 // socket montado pelo override.
+// Variáveis que o próprio container "login" recebe (ver
+// docker-compose.manual-tls.yml) e que também são usadas por interpolação
+// (${VAR}) em outros lugares do docker-compose.yml - no Docker Compose,
+// uma env var já definida no PROCESSO tem prioridade sobre o valor do
+// .env na hora de resolver "${VAR}". Repassar isso pro "docker compose"
+// que rodamos por baixo fazia ele enxergar o valor "congelado" de quando
+// o login subiu, ignorando qualquer mudança feita no .env depois (foi
+// assim que uma publicação de schema recriava o "rest" com o
+// PGRST_DB_SCHEMAS antigo, mesmo com o .env já certo).
+const LOGIN_OWN_ENV_KEYS = [
+  'AUTH_COOKIE_SECRET', 'PROJECT_TITLE', 'PROJECT_TAGLINE', 'PROJECT_DESCRIPTION',
+  'FUNCTIONS_DIR', 'PORT', 'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_DB',
+  'POSTGRES_PASSWORD', 'BACKUP_CONFIG_FILE', 'HOST_PROJECT_DIR', 'PGRST_DB_SCHEMAS',
+];
+function dockerComposeEnv() {
+  const env = { ...process.env };
+  for (const key of LOGIN_OWN_ENV_KEYS) delete env[key];
+  return env;
+}
+
 async function recreateRestAndStudio() {
   if (!HOST_PROJECT_DIR) throw new Error('HOST_PROJECT_DIR não configurado - veja docs/schemas-panel.md.');
-  const opts = { cwd: HOST_PROJECT_DIR, env: process.env, maxBuffer: 10 * 1024 * 1024 };
+  const opts = { cwd: HOST_PROJECT_DIR, env: dockerComposeEnv(), maxBuffer: 10 * 1024 * 1024 };
   await execFileAsync(
     'docker',
     ['compose', 'up', '-d', '--wait', '--force-recreate', '--no-deps', 'rest', 'studio'],
