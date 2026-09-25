@@ -1,0 +1,50 @@
+# Override OPCIONAL que liga a automação de ponta a ponta da aba
+# "Schemas" em /admin (expor um schema do Postgres via PostgREST com um
+# clique, sem terminal). Sem este override, a aba Schemas continua
+# existindo e mostra os schemas cadastrados, mas o botão "Publicar" falha
+# pedindo esse override.
+#
+# O que ele dá ao container "login" (login-server.js), e por quê:
+#   - Acesso ao socket do Docker (DOCKER_SOCKET_LOCATION, já usado pelo
+#     Vector no override de logs) - é o único jeito do painel recriar os
+#     serviços "rest"/"studio" sozinho depois de mudar PGRST_DB_SCHEMAS no
+#     .env. Isso equivale a dar a esse container controle root sobre o
+#     HOST INTEIRO (não só sobre este projeto Supabase) - quem tiver
+#     acesso de admin em /admin passa a poder, na prática, controlar
+#     qualquer container do servidor (inclusive a rádio, se dividir host).
+#   - Leitura/escrita da pasta inteira deste projeto, montada no MESMO
+#     caminho absoluto de dentro do container (HOST_PROJECT_DIR, veja
+#     .env.example) - necessário porque o "docker compose" que roda de
+#     dentro do container login (falando com o Docker do host através do
+#     socket acima) só resolve os volumes relativos (ex.: "./volumes/...")
+#     do jeito certo se enxergar a mesma árvore de diretórios que existe
+#     de verdade no host, no mesmo caminho.
+#
+# Veja o passo a passo e a avaliação de risco completa em
+# docs/schemas-panel.md antes de habilitar. Se preferir não conceder esse
+# acesso, a alternativa é publicar manualmente: a aba Schemas já roda os
+# GRANTs sozinha e só pede pra você colar um comando (mostrado na própria
+# tela) pra terminar - veja a mesma doc.
+#
+# Uso (depois de preencher HOST_PROJECT_DIR no .env):
+#   sh run.sh config add schemas-panel
+#   sh run.sh recreate login
+
+services:
+  login:
+    # Reescreve o command inteiro (não dá para "acrescentar" um pacote apk
+    # a um override outro) - mantém os mesmos pacotes de
+    # docker-compose.manual-tls.yml (postgresql-client/tar, para Backup) e
+    # adiciona docker-cli + o plugin de compose.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache postgresql-client tar docker-cli docker-cli-compose >/dev/null
+        exec node /app/login-server.js
+    environment:
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR}
+    volumes:
+      - ${DOCKER_SOCKET_LOCATION:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${HOST_PROJECT_DIR}:${HOST_PROJECT_DIR}

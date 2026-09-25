@@ -44,6 +44,25 @@ const PG_ENV = {
   PGUSER: 'postgres',
 };
 
+// Aba Schemas em /admin - expor um schema do Postgres via PostgREST sem
+// terminal. Só funciona de ponta a ponta com o override opcional
+// docker-compose.schemas-panel.yml (socket do Docker + esta pasta do
+// projeto montada no mesmo caminho do host) - veja docs/schemas-panel.md.
+// Sem HOST_PROJECT_DIR, a aba lista os schemas mas não publica sozinha.
+const HOST_PROJECT_DIR = process.env.HOST_PROJECT_DIR || '';
+const ENV_FILE = HOST_PROJECT_DIR ? path.join(HOST_PROJECT_DIR, '.env') : '';
+
+// Schemas internos do próprio Supabase - nunca oferecidos para expor
+// pelo painel (ex.: auth.users tem hash de senha e não foi desenhado
+// para responder via API pública; RLS não cobre isso por padrão).
+const RESERVED_SCHEMAS = new Set([
+  'pg_catalog', 'information_schema', 'pg_toast',
+  'auth', 'storage', 'realtime', '_realtime', 'supabase_functions',
+  'supabase_migrations', 'extensions', 'pgbouncer', 'pgsodium',
+  'pgsodium_masks', 'vault', '_analytics', 'net', 'cron', 'graphql',
+]);
+const SCHEMA_ROLES = ['anon', 'authenticated', 'service_role'];
+
 // Conteúdo da tela de abertura - troque por env var sem tocar no código.
 const PROJECT_TITLE = process.env.PROJECT_TITLE || 'Valleti Books & Rádio';
 const PROJECT_TAGLINE = process.env.PROJECT_TAGLINE || 'Painel administrativo';
@@ -518,6 +537,123 @@ async function dumpPostgres(destPath) {
 
 async function tarFunctions(destPath) {
   await execFileAsync('tar', ['czf', destPath, '-C', FUNCTIONS_DIR, '.'], { maxBuffer: 1024 * 1024 * 1024 });
+}
+
+// --- Aba Schemas: listar/expor schemas do Postgres via PostgREST ---
+
+// Todo schema "de verdade" do banco (usuário ou de extensão), sem os
+// internos do Postgres (pg_% e information_schema) - os internos do
+// Supabase (auth, storage etc.) continuam na lista, mas RESERVED_SCHEMAS
+// os bloqueia mais adiante.
+async function listSchemas() {
+  const { stdout } = await execFileAsync(
+    'psql',
+    ['-tAc', "select nspname from pg_namespace where nspname !~ '^pg_' and nspname <> 'information_schema' order by 1"],
+    { env: { ...process.env, ...PG_ENV }, maxBuffer: 10 * 1024 * 1024 }
+  );
+  return stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+function readEnvFileRaw() {
+  if (!ENV_FILE) throw new Error('HOST_PROJECT_DIR não configurado - veja docs/schemas-panel.md.');
+  return fs.readFileSync(ENV_FILE, 'utf8');
+}
+
+function readEnvVar(name) {
+  const match = readEnvFileRaw().match(new RegExp(`^${name}=(.*)$`, 'm'));
+  return match ? match[1].trim().replace(/^["']|["']$/g, '') : '';
+}
+
+// Mesma ideia do write_compose_file do run.sh (sed na linha existente, ou
+// acrescenta no fim se a chave ainda não existir).
+function writeEnvVar(name, value) {
+  const raw = readEnvFileRaw();
+  const line = `${name}=${value}`;
+  const re = new RegExp(`^${name}=.*$`, 'm');
+  const next = re.test(raw) ? raw.replace(re, line) : `${raw.replace(/\n+$/, '')}\n${line}\n`;
+  fs.writeFileSync(ENV_FILE, next);
+}
+
+// Sem HOST_PROJECT_DIR (override schemas-panel não habilitado), não dá
+// para ler o .env de dentro do container - cai para a própria env var
+// PGRST_DB_SCHEMAS do processo (também repassada ao container "login" no
+// docker-compose.manual-tls.yml), que é read-only mas já é o bastante
+// para a aba mostrar o estado atual, só sem poder publicar.
+function currentExposedSchemas() {
+  const raw = HOST_PROJECT_DIR ? readEnvVar('PGRST_DB_SCHEMAS') : (process.env.PGRST_DB_SCHEMAS || '');
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// GRANTs necessários para o PostgREST (e RLS por cima) conseguirem
+// enxergar o schema - PGRST_DB_SCHEMAS sozinho não é suficiente. Aplica a
+// tabelas/sequences/routines já existentes e às futuras (ALTER DEFAULT
+// PRIVILEGES), mesmo padrão que já era feito manualmente via psql.
+async function grantSchemaAccess(schema) {
+  const q = schema.replace(/"/g, '""');
+  const roles = SCHEMA_ROLES.join(', ');
+  const sql = [
+    `GRANT USAGE ON SCHEMA "${q}" TO ${roles};`,
+    `GRANT ALL ON ALL TABLES IN SCHEMA "${q}" TO ${roles};`,
+    `GRANT ALL ON ALL SEQUENCES IN SCHEMA "${q}" TO ${roles};`,
+    `GRANT ALL ON ALL ROUTINES IN SCHEMA "${q}" TO ${roles};`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA "${q}" GRANT ALL ON TABLES TO ${roles};`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA "${q}" GRANT ALL ON SEQUENCES TO ${roles};`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA "${q}" GRANT ALL ON ROUTINES TO ${roles};`,
+  ].join('\n');
+  await execFileAsync('psql', ['-v', 'ON_ERROR_STOP=1', '-c', sql], {
+    env: { ...process.env, ...PG_ENV },
+    maxBuffer: 10 * 1024 * 1024,
+  });
+}
+
+// Recria só "rest"/"studio" (--no-deps: não mexe no resto da stack, igual
+// "sh run.sh recreate <serviço>") para o novo PGRST_DB_SCHEMAS do .env
+// entrar em vigor. Precisa rodar com cwd == HOST_PROJECT_DIR para os
+// caminhos relativos do compose (./volumes/...) resolverem certo contra o
+// Docker do HOST, que é quem realmente cria os containers através do
+// socket montado pelo override.
+async function recreateRestAndStudio() {
+  if (!HOST_PROJECT_DIR) throw new Error('HOST_PROJECT_DIR não configurado - veja docs/schemas-panel.md.');
+  await execFileAsync(
+    'docker',
+    ['compose', 'up', '-d', '--wait', '--force-recreate', '--no-deps', 'rest', 'studio'],
+    { cwd: HOST_PROJECT_DIR, env: process.env, maxBuffer: 10 * 1024 * 1024 }
+  );
+}
+
+let schemaPublishRunning = false;
+let schemaPublishState = { lastStatus: null, lastError: null, lastAt: null };
+
+async function publishSchemas(desiredSchemas) {
+  const allSchemas = await listSchemas();
+  const validNames = new Set(allSchemas);
+  for (const s of desiredSchemas) {
+    if (!validNames.has(s)) throw new Error(`Schema "${s}" não existe.`);
+    if (RESERVED_SCHEMAS.has(s)) throw new Error(`Schema "${s}" é interno do Supabase e não pode ser exposto.`);
+  }
+  const current = new Set(currentExposedSchemas());
+  const toGrant = desiredSchemas.filter((s) => !current.has(s));
+  for (const s of toGrant) {
+    await grantSchemaAccess(s);
+  }
+  writeEnvVar('PGRST_DB_SCHEMAS', desiredSchemas.join(','));
+  await recreateRestAndStudio();
+}
+
+function runSchemaPublishInBackground(desiredSchemas) {
+  schemaPublishRunning = true;
+  schemaPublishState.lastError = null;
+  publishSchemas(desiredSchemas)
+    .then(() => {
+      schemaPublishState.lastStatus = 'ok';
+      schemaPublishState.lastAt = new Date().toISOString();
+    })
+    .catch((e) => {
+      schemaPublishState.lastStatus = 'error';
+      schemaPublishState.lastError = e.message;
+      console.error(`Publicar schemas falhou: ${e.message}`);
+    })
+    .finally(() => { schemaPublishRunning = false; });
 }
 
 // AAAAMMDDHHmm (sem separador) - vira o nome da subpasta de cada rodada.
@@ -1540,6 +1676,20 @@ ${THEME_CSS}
   .backup-status.connected .dot { background: var(--accent); }
   .backup-status.disconnected .dot { background: var(--text-muted); }
   .backup-connect-row { display: flex; gap: 10px; margin-bottom: 20px; }
+  .schemas-warn {
+    background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text);
+    border-radius: 8px; padding: 10px 14px; margin: 0 0 16px;
+  }
+  .schema-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .schema-row:last-child { border-bottom: none; }
+  .schema-row .schema-name { font-family: ui-monospace, Menlo, monospace; flex: 1; }
+  .schema-row .schema-tag {
+    font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 8px;
+  }
   .subtabs { display: flex; gap: 8px; margin-bottom: 20px; }
   .subtab-btn {
     padding: 8px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
@@ -1641,6 +1791,7 @@ ${THEME_CSS}
       <button class="tab-btn active" data-tab="users" type="button">Usuários</button>
       <button class="tab-btn" data-tab="functions" type="button">Edge Functions</button>
       <button class="tab-btn" data-tab="settings" type="button">Backup</button>
+      <button class="tab-btn" data-tab="schemas" type="button">Schemas</button>
     </div>
 
     <div class="tab-panel active" id="usersPanel">
@@ -1760,6 +1911,53 @@ ${THEME_CSS}
             <tbody id="backupBrowserBody"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="schemasPanel">
+      <div class="toolbar">
+        <div>
+          <h1>Schemas</h1>
+          <p class="sub">Exponha um schema do Postgres via PostgREST (API pública) sem terminal.</p>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="msg" id="schemasMsg"></div>
+        <div class="hint schemas-warn" id="schemasHostWarning" style="display:none;">
+          <strong>Publicar direto pelo painel está desligado neste servidor.</strong>
+          Falta configurar <code>HOST_PROJECT_DIR</code> no <code>.env</code> e adicionar o
+          override <code>docker-compose.schemas-panel.yml</code> (veja
+          <code>docs/schemas-panel.md</code>). Até lá, dá pra ver os schemas aqui, mas
+          publicar exige rodar o comando manualmente.
+        </div>
+        <p class="hint">
+          Marque os schemas que devem responder em <code>/rest/v1/</code> (respeitando RLS).
+          Schemas internos do próprio Supabase não aparecem na lista - não é seguro expô-los.
+          Publicar aplica os GRANTs necessários no banco e recria os serviços <code>rest</code>
+          e <code>studio</code> - a API fica fora do ar por alguns segundos durante a troca.
+        </p>
+        <div id="schemasList"></div>
+        <div class="editor-actions">
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-primary" id="schemasPublishBtn">Publicar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="schemasConfirmOverlay">
+    <div class="card">
+      <h2>Confirmar publicação</h2>
+      <p class="hint">Essa ação muda permissões do banco e reinicia serviços - digite sua senha de novo para confirmar.</p>
+      <div class="msg" id="schemasConfirmMsg"></div>
+      <label for="schemasConfirmUser">Usuário</label>
+      <input type="text" id="schemasConfirmUser" autocomplete="username">
+      <label for="schemasConfirmPassword">Senha</label>
+      <input type="password" id="schemasConfirmPassword" autocomplete="current-password">
+      <div class="card-actions">
+        <button type="button" class="btn" id="schemasConfirmCancelBtn">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="schemasConfirmBtn">Confirmar e publicar</button>
       </div>
     </div>
   </div>
@@ -1927,6 +2125,7 @@ ${THEME_CSS}
       users: document.getElementById('usersPanel'),
       functions: document.getElementById('functionsPanel'),
       settings: document.getElementById('settingsPanel'),
+      schemas: document.getElementById('schemasPanel'),
     };
     var functionsLoaded = false;
     tabButtons.forEach(function (btn) {
@@ -1941,6 +2140,9 @@ ${THEME_CSS}
         }
         if (btn.dataset.tab === 'settings') {
           loadBackupConfig();
+        }
+        if (btn.dataset.tab === 'schemas') {
+          loadSchemas();
         }
       });
     });
@@ -2600,6 +2802,113 @@ ${THEME_CSS}
         });
       });
     }
+
+    // --- Aba Schemas ---
+    function schemasShowMsg(text, kind) {
+      var el = document.getElementById('schemasMsg');
+      el.textContent = text;
+      el.className = 'msg ' + kind;
+      el.style.display = 'block';
+    }
+    function schemasHideMsg() { document.getElementById('schemasMsg').style.display = 'none'; }
+
+    var schemasListEl = document.getElementById('schemasList');
+    var schemasPublishBtn = document.getElementById('schemasPublishBtn');
+    var schemasConfirmOverlay = document.getElementById('schemasConfirmOverlay');
+    var schemasPublishing = false;
+
+    function renderSchemas(data) {
+      document.getElementById('schemasHostWarning').style.display = data.hostProjectDirConfigured ? 'none' : 'block';
+      schemasPublishBtn.disabled = !data.hostProjectDirConfigured || data.running;
+      schemasListEl.innerHTML = '';
+      data.schemas.filter(function (s) { return !s.reserved; }).forEach(function (s) {
+        var row = document.createElement('label');
+        row.className = 'schema-row';
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = s.exposed;
+        checkbox.dataset.schema = s.name;
+        var name = document.createElement('span');
+        name.className = 'schema-name';
+        name.textContent = s.name;
+        row.appendChild(checkbox);
+        row.appendChild(name);
+        if (s.exposed) {
+          var tag = document.createElement('span');
+          tag.className = 'schema-tag';
+          tag.textContent = 'exposto';
+          row.appendChild(tag);
+        }
+        schemasListEl.appendChild(row);
+      });
+    }
+
+    function pollSchemaPublishStatus() {
+      fetch('/admin/api/schemas').then(function (r) { return r.json(); }).then(function (data) {
+        renderSchemas(data);
+        if (data.running) {
+          setTimeout(pollSchemaPublishStatus, 2000);
+        } else if (schemasPublishing) {
+          schemasPublishing = false;
+          if (data.lastStatus === 'ok') {
+            schemasShowMsg('Schemas publicados com sucesso.', 'ok');
+            setTimeout(schemasHideMsg, 4000);
+          } else if (data.lastStatus === 'error') {
+            schemasShowMsg('Falha ao publicar: ' + (data.lastError || ''), 'error');
+          }
+        }
+      });
+    }
+
+    function loadSchemas() {
+      fetch('/admin/api/schemas')
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { schemasShowMsg(res.d.error || 'Não foi possível carregar os schemas.', 'error'); return; }
+          renderSchemas(res.d);
+          if (res.d.running) { schemasPublishing = true; pollSchemaPublishStatus(); }
+        });
+    }
+
+    schemasPublishBtn.addEventListener('click', function () {
+      schemasHideMsg();
+      document.getElementById('schemasConfirmMsg').style.display = 'none';
+      document.getElementById('schemasConfirmUser').value = '';
+      document.getElementById('schemasConfirmPassword').value = '';
+      schemasConfirmOverlay.classList.add('open');
+    });
+
+    document.getElementById('schemasConfirmCancelBtn').addEventListener('click', function () {
+      schemasConfirmOverlay.classList.remove('open');
+    });
+
+    document.getElementById('schemasConfirmBtn').addEventListener('click', function () {
+      var checkboxes = schemasListEl.querySelectorAll('input[type="checkbox"]');
+      var schemas = [];
+      checkboxes.forEach(function (c) { if (c.checked) schemas.push(c.dataset.schema); });
+      var username = document.getElementById('schemasConfirmUser').value.trim();
+      var password = document.getElementById('schemasConfirmPassword').value;
+      var confirmMsg = document.getElementById('schemasConfirmMsg');
+
+      fetch('/admin/api/schemas/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schemas: schemas, username: username, password: password }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) {
+            confirmMsg.textContent = res.d.error || 'Não foi possível publicar.';
+            confirmMsg.className = 'msg error';
+            confirmMsg.style.display = 'block';
+            return;
+          }
+          schemasConfirmOverlay.classList.remove('open');
+          schemasPublishing = true;
+          schemasShowMsg('Publicando - GRANTs no banco e recriando rest/studio...', 'ok');
+          pollSchemaPublishStatus();
+        });
+    });
 
     // Atalho vindo do botão injetado na página da função no Studio
     // (?editFunction=<nome>) - já abre direto na aba certa com o editor.
@@ -3535,6 +3844,68 @@ function handleRequest(req, res) {
       if (!config.driveFolderId) { sendJson(res, 400, { error: 'Configure a pasta do Drive primeiro.' }); return; }
       runBackupInBackground();
       sendJson(res, 200, { started: true });
+      return;
+    }
+  }
+
+  // --- Schemas (aba Schemas), também restrito a role === 'admin' ---
+  if (url.pathname.startsWith('/admin/api/schemas')) {
+    const user = getSessionUser(req);
+    if (!isAdmin(user)) {
+      sendJson(res, user ? 403 : 401, { error: 'Acesso restrito a administradores.' });
+      return;
+    }
+
+    if (url.pathname === '/admin/api/schemas' && req.method === 'GET') {
+      listSchemas()
+        .then((all) => {
+          const exposed = new Set(currentExposedSchemas());
+          const schemas = all.map((name) => ({
+            name,
+            reserved: RESERVED_SCHEMAS.has(name),
+            exposed: exposed.has(name),
+          }));
+          sendJson(res, 200, {
+            schemas,
+            hostProjectDirConfigured: !!HOST_PROJECT_DIR,
+            running: schemaPublishRunning,
+            lastStatus: schemaPublishState.lastStatus,
+            lastError: schemaPublishState.lastError,
+            lastAt: schemaPublishState.lastAt,
+          });
+        })
+        .catch((e) => sendJson(res, 500, { error: e.message }));
+      return;
+    }
+
+    if (url.pathname === '/admin/api/schemas/publish' && req.method === 'POST') {
+      if (schemaPublishRunning) { sendJson(res, 409, { error: 'Já tem uma publicação em andamento.' }); return; }
+      if (!HOST_PROJECT_DIR) {
+        sendJson(res, 400, { error: 'HOST_PROJECT_DIR não configurado - veja docs/schemas-panel.md.' });
+        return;
+      }
+      collectBody(req, (body) => {
+        let data;
+        try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+
+        const schemas = Array.isArray(data.schemas) ? data.schemas.filter((s) => typeof s === 'string') : null;
+        if (!schemas) { sendJson(res, 400, { error: 'Informe a lista de schemas.' }); return; }
+
+        // Reconfirma usuário/senha antes de mudar permissões do banco e
+        // recriar containers - a sessão já garante "é um admin logado",
+        // isso garante "é a MESMA pessoa, agora, de novo" (igual sudo),
+        // já que essa ação tem efeito real e imediato no servidor.
+        const username = typeof data.username === 'string' ? data.username.trim() : '';
+        const password = typeof data.password === 'string' ? data.password : '';
+        const confirmUser = findUser(loadUsers(), username);
+        if (!confirmUser || !isAdmin(confirmUser) || !verifyPassword(password, confirmUser.salt, confirmUser.hash)) {
+          sendJson(res, 401, { error: 'Usuário ou senha inválidos.' });
+          return;
+        }
+
+        runSchemaPublishInBackground(schemas);
+        sendJson(res, 200, { started: true });
+      });
       return;
     }
   }

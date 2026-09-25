@@ -122,7 +122,7 @@ Isso imprime `{"salt": "...", "hash": "..."}`. Edite
 
 `"role"` é `"admin"` ou `"user"` (padrão se omitido). **Pelo menos um
 usuário precisa ser `"admin"`** — é ele quem consegue acessar
-`https://SEU_DOMINIO:9443/admin`, um painel com três abas:
+`https://SEU_DOMINIO:9443/admin`, um painel com quatro abas:
 
 - **Usuários** — CRUD para cadastrar, editar (senha/papel) e excluir os
   demais usuários direto pelo navegador, sem precisar mexer em
@@ -197,6 +197,20 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   própria conta. Veja o passo a passo completo (criar as credenciais no
   Google Cloud Console, conectar, escolher a pasta/frequência/retenção)
   em [docs/backup-google-drive.md](docs/backup-google-drive.md).
+
+- **Schemas** — expõe um schema do Postgres via PostgREST (API pública em
+  `/rest/v1/`) com um clique, sem precisar rodar `GRANT` nem editar
+  `docker-compose.yml` no terminal — o self-hosted não tem a tela do
+  Supabase hospedado que faz isso. Lista os schemas cadastrados (schemas
+  internos do próprio Supabase, como `auth`/`storage`, nunca aparecem —
+  não é seguro expô-los), marca quais já respondem pela API, e o botão
+  **Publicar** pede a senha de novo (confirmação extra, tipo `sudo`,
+  porque a ação muda permissões do banco e reinicia serviços). Publicar
+  de ponta a ponta pelo painel é opcional e exige o override
+  `docker-compose.schemas-panel.yml` — veja o motivo (acesso ao socket do
+  Docker) e o passo a passo em
+  [docs/schemas-panel.md](docs/schemas-panel.md). Sem esse override, a
+  aba continua útil só pra visualizar o estado atual.
 
 Quem é `"user"` não vê esse painel (dá 403).
 
