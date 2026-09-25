@@ -614,11 +614,21 @@ async function grantSchemaAccess(schema) {
 // socket montado pelo override.
 async function recreateRestAndStudio() {
   if (!HOST_PROJECT_DIR) throw new Error('HOST_PROJECT_DIR não configurado - veja docs/schemas-panel.md.');
+  const opts = { cwd: HOST_PROJECT_DIR, env: process.env, maxBuffer: 10 * 1024 * 1024 };
   await execFileAsync(
     'docker',
     ['compose', 'up', '-d', '--wait', '--force-recreate', '--no-deps', 'rest', 'studio'],
-    { cwd: HOST_PROJECT_DIR, env: process.env, maxBuffer: 10 * 1024 * 1024 }
+    opts
   );
+  // O Nginx resolve o endereço de rede de "studio"/"rest" uma vez só, ao
+  // subir, e não percebe sozinho que mudou depois de um recreate - pode
+  // inclusive continuar apontando para o endereço antigo, que o Docker já
+  // reaproveitou para OUTRO container (foi exatamente isso que quebrou a
+  // home em produção na primeira versão desta função: Nginx passou a
+  // mandar "/" para o "rest" por engano). Reinicia o Nginx pra ele
+  // re-resolver os dois hostnames certos - alguns segundos de instabilidade
+  // no site inteiro (não só na API), inevitável com essa arquitetura.
+  await execFileAsync('docker', ['compose', 'restart', 'nginx'], opts);
 }
 
 let schemaPublishRunning = false;

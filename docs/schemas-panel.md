@@ -23,8 +23,11 @@ Supabase hospedado — por padrão só `public`/`graphql_public` respondem em
      futuras) pros papéis `anon`, `authenticated`, `service_role`.
    - RLS continua valendo por cima disso — expor o schema não quer dizer
      que qualquer chave lê tudo, só que a tabela passa a existir pra API.
-5. Atualiza `PGRST_DB_SCHEMAS` no `.env` e recria os serviços `rest` e
-   `studio` (a API fica fora do ar por alguns segundos durante a troca).
+5. Atualiza `PGRST_DB_SCHEMAS` no `.env`, recria os serviços `rest` e
+   `studio`, e reinicia o `nginx` em seguida (necessário para ele
+   enxergar os dois containers novos - ver "Limitações conhecidas" mais
+   abaixo). O **site inteiro** (não só a API) fica fora do ar por alguns
+   segundos durante a troca.
 
 ## Duas formas de terminar a publicação (parte 2, a que muda o PostgREST)
 
@@ -43,7 +46,16 @@ com um aviso explicando o que falta. Nesse caso, publique manualmente:
 # edite PGRST_DB_SCHEMAS no .env (adicione o schema, separado por vírgula)
 nano .env
 sh run.sh recreate rest studio
+sh run.sh restart nginx
 ```
+
+**O `restart nginx` no final não é opcional.** O Nginx guarda em cache o
+endereço de rede de `rest`/`studio` desde quando ele mesmo subiu, e não
+percebe sozinho que mudou depois de um recreate - pode até continuar
+apontando para o endereço antigo, que o Docker já reaproveitou para
+OUTRO container (foi assim que a home do site serviu a resposta do
+PostgREST no lugar da tela de login, num teste feito durante o
+desenvolvimento desta funcionalidade). Reiniciar o Nginx corrige.
 
 ### Opção B — com o override `docker-compose.schemas-panel.yml`
 
@@ -88,10 +100,11 @@ sh run.sh recreate login
 
 ## Limitações conhecidas
 
-- Publicar recria `rest` e `studio` (`--force-recreate --no-deps`) — só
-  esses dois, o resto da stack (Auth, Storage, Realtime, o próprio banco)
-  não é afetado, mas a API REST/GraphQL fica fora do ar por alguns
-  segundos durante a troca.
+- Publicar recria `rest` e `studio` e depois reinicia o `nginx` (motivo
+  explicado acima, na Opção A) — o resto da stack (Auth, Storage,
+  Realtime, o próprio banco) não é afetado, mas o **site inteiro**
+  (não só a API) fica fora do ar por alguns segundos durante a troca,
+  por causa do restart do Nginx.
 - A validação da senha de confirmação usa o mesmo `users.json` do login
   normal — se a pessoa foi removida ou teve o papel rebaixado depois de
   logar, a confirmação falha mesmo com a sessão ainda válida (esperado).

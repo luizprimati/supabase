@@ -205,7 +205,8 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   internos do próprio Supabase, como `auth`/`storage`, nunca aparecem —
   não é seguro expô-los), marca quais já respondem pela API, e o botão
   **Publicar** pede a senha de novo (confirmação extra, tipo `sudo`,
-  porque a ação muda permissões do banco e reinicia serviços). Publicar
+  porque a ação muda permissões do banco e reinicia `rest`/`studio`/
+  `nginx` - o site inteiro fica fora do ar por alguns segundos). Publicar
   de ponta a ponta pelo painel é opcional e exige o override
   `docker-compose.schemas-panel.yml` — veja o motivo (acesso ao socket do
   Docker) e o passo a passo em
