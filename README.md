@@ -279,13 +279,16 @@ clicar, abre o formulário de usuário/senha (um dos cadastrados no Passo
 Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RADIO`
 (nenhuma porta dela foi alterada).
 
-A sessão dura 7 dias (cookie); para sair antes disso, acesse
-`https://supabase.primati.com.br:9443/logout` ou use o botão verde
+A sessão dura 7 dias (cookie); o Studio não tem logout próprio (não sabe
+nada do nosso login por fora), então quem não é admin sai por
+`https://supabase.primati.com.br:9443/logout` ou pelo botão verde
 flutuante e discreto no canto inferior direito da tela principal do
-Studio (`/project/default`, a primeira página depois do login) - só
-aparece ali pra não brigar com outros elementos que já ocupam esse
-canto em várias páginas internas. O Studio não tem logout próprio -
-não sabe nada do nosso login por fora.
+Studio (`/project/default`, a primeira página depois do login - só
+aparece ali pra não brigar com outros elementos que já ocupam esse canto
+em várias páginas internas). Para quem é admin, esse mesmo botão leva de
+volta pro painel `/admin` em vez de deslogar (ícone de seta em vez de
+porta) - sair continua disponível pelo `/logout` direto, ou pelo botão
+"Sair" na barra do `/admin`.
 
 ## Problemas conhecidos (troubleshooting)
 

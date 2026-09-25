@@ -2974,15 +2974,24 @@ ${THEME_CSS}
 // parâmetro de configuração - o sub_filter só injeta uma tag <script src>
 // pequena e fixa; o conteúdo de verdade nunca passa pelo parser de config
 // do Nginx, então cresce à vontade sem esbarrar nesse teto.
-const STUDIO_INJECT_JS = `(function () {
+// Admin volta pro painel /admin ao clicar (pediu pra não deslogar mais) -
+// quem não é admin não tem pra onde voltar ali, então continua saindo de
+// verdade. Por isso este é servido dinamicamente (função, não const) -
+// precisa saber o papel de quem está pedindo o arquivo.
+function studioInjectJs(isAdminUser) {
+  return `(function () {
   'use strict';
+
+  var FAB_IS_ADMIN = ${isAdminUser ? 'true' : 'false'};
+  var FAB_HREF = ${isAdminUser ? "'/admin'" : "'/logout'"};
+  var FAB_TITLE = ${isAdminUser ? "'Painel admin'" : "'Sair'"};
 
   function createLogoutButton() {
     if (document.getElementById('__logout_fab')) return;
     var btn = document.createElement('a');
     btn.id = '__logout_fab';
-    btn.href = '/logout';
-    btn.title = 'Sair';
+    btn.href = FAB_HREF;
+    btn.title = FAB_TITLE;
     btn.style.position = 'fixed';
     btn.style.bottom = '20px';
     btn.style.right = '20px';
@@ -3020,14 +3029,25 @@ const STUDIO_INJECT_JS = `(function () {
     svg.setAttribute('stroke-width', '2');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
-    var path = document.createElementNS(svgNS, 'path');
-    path.setAttribute('d', 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4');
-    var poly = document.createElementNS(svgNS, 'polyline');
-    poly.setAttribute('points', '16 17 21 12 16 7');
-    var line = document.createElementNS(svgNS, 'line');
-    line.setAttribute('x1', '21'); line.setAttribute('y1', '12');
-    line.setAttribute('x2', '9'); line.setAttribute('y2', '12');
-    svg.appendChild(path); svg.appendChild(poly); svg.appendChild(line);
+    if (FAB_IS_ADMIN) {
+      // Seta pra esquerda ("voltar ao painel").
+      var backLine = document.createElementNS(svgNS, 'line');
+      backLine.setAttribute('x1', '19'); backLine.setAttribute('y1', '12');
+      backLine.setAttribute('x2', '5'); backLine.setAttribute('y2', '12');
+      var backPoly = document.createElementNS(svgNS, 'polyline');
+      backPoly.setAttribute('points', '12 19 5 12 12 5');
+      svg.appendChild(backLine); svg.appendChild(backPoly);
+    } else {
+      // Porta com seta ("sair").
+      var path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4');
+      var poly = document.createElementNS(svgNS, 'polyline');
+      poly.setAttribute('points', '16 17 21 12 16 7');
+      var line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', '21'); line.setAttribute('y1', '12');
+      line.setAttribute('x2', '9'); line.setAttribute('y2', '12');
+      svg.appendChild(path); svg.appendChild(poly); svg.appendChild(line);
+    }
     btn.appendChild(svg);
     document.body.appendChild(btn);
   }
@@ -3374,6 +3394,7 @@ const STUDIO_INJECT_JS = `(function () {
   ensureAll();
 })();
 `;
+}
 
 function collectBody(req, callback) {
   let data = '';
@@ -3415,10 +3436,11 @@ function handleRequest(req, res) {
 
   // Servido no lugar de embutir o JS direto na diretiva sub_filter do
   // Nginx (que tem um limite de ~4KB por parâmetro de config) - veja
-  // STUDIO_INJECT_JS acima.
+  // studioInjectJs() acima.
   if (url.pathname === '/studio-inject.js' && req.method === 'GET') {
+    const user = getSessionUser(req);
     res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-    res.end(STUDIO_INJECT_JS);
+    res.end(studioInjectJs(isAdmin(user)));
     return;
   }
 
