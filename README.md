@@ -41,7 +41,7 @@ Storage, imgproxy, postgres-meta, Edge Functions, Postgres e o pooler
 Leia **[docs/oracle-cloud.md](docs/oracle-cloud.md)**: liberar a porta
 **9443** (não 80/443 — são da rádio) no Security List/NSG *e* no `iptables`
 da instância, e criar o registro DNS `A` de
-`supabase.valletibooks.com.br` apontando para o IP público do servidor.
+`supabase.primati.com.br` apontando para o IP público do servidor.
 
 ## Passo 2 — Clonar este repositório no servidor
 
@@ -62,10 +62,10 @@ sh utils/add-new-auth-keys.sh --update-env   # chaves de API assimétricas (novo
 Edite `.env` e ajuste (note a porta `9443` nas URLs):
 
 ```dotenv
-SUPABASE_PUBLIC_URL=https://supabase.valletibooks.com.br:9443
-API_EXTERNAL_URL=https://supabase.valletibooks.com.br:9443/auth/v1
-SITE_URL=https://supabase.valletibooks.com.br:9443
-PROXY_DOMAIN=supabase.valletibooks.com.br
+SUPABASE_PUBLIC_URL=https://supabase.primati.com.br:9443
+API_EXTERNAL_URL=https://supabase.primati.com.br:9443/auth/v1
+SITE_URL=https://supabase.primati.com.br:9443
+PROXY_DOMAIN=supabase.primati.com.br
 SUPABASE_PROXY_PORT=9443
 ```
 
@@ -267,10 +267,10 @@ sh run.sh start
 
 ```bash
 sh run.sh status
-curl -kI https://supabase.valletibooks.com.br:9443
+curl -kI https://supabase.primati.com.br:9443
 ```
 
-Abra `https://supabase.valletibooks.com.br:9443` no navegador — deve
+Abra `https://supabase.primati.com.br:9443` no navegador — deve
 mostrar a tela de abertura do projeto com um botão "Entrar" no canto; ao
 clicar, abre o formulário de usuário/senha (um dos cadastrados no Passo
 5), e depois abre o Studio.
@@ -279,7 +279,7 @@ Confirme que a rádio continua no ar normalmente em `http(s)://SEU_DOMINIO_DA_RA
 (nenhuma porta dela foi alterada).
 
 A sessão dura 7 dias (cookie); para sair antes disso, acesse
-`https://supabase.valletibooks.com.br:9443/logout` ou use o botão verde
+`https://supabase.primati.com.br:9443/logout` ou use o botão verde
 flutuante e discreto no canto inferior direito da tela principal do
 Studio (`/project/default`, a primeira página depois do login) - só
 aparece ali pra não brigar com outros elementos que já ocupam esse

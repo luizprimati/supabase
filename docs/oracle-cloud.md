@@ -77,22 +77,25 @@ curl -kI https://SEU_IP_PUBLICO:9443
 Timeout = firewall (NSG ou iptables) ainda não liberou. "Connection
 refused" = firewall ok, containers do Supabase ainda não subiram.
 
-## DNS — subdomínio no Wix
+## DNS — subdomínio no registro.br
 
-1. Painel Wix → **Configurações do domínio** → `valletibooks.com.br` →
-   **DNS** → adicionar registro:
+`primati.com.br` está registrado no [registro.br](https://registro.br) (o
+domínio anterior, `valletibooks.com.br`, ficava no Wix - migração já
+concluída, veja o histórico de commits deste repositório).
+
+1. [registro.br](https://registro.br) → **Meus domínios** →
+   `primati.com.br` → **DNS** → adicionar registro:
    - Tipo: **A**
    - Nome/Host: `supabase`
    - Valor: `167.126.27.216` (IP público atual da instância — se você
      reservar um IP fixo depois em **Networking → IP Management →
      Reserved Public IPs**, atualize aqui).
    - TTL: padrão.
-2. Confirme com `dig +short supabase.valletibooks.com.br` até aparecer o
-   IP correto.
-3. O acesso final é `https://supabase.valletibooks.com.br:9443` — a porta
-   faz parte da URL, não tem como ficar "escondida" sem mexer no
-   AzuraCast (veja o README para as alternativas que foram descartadas e
-   por quê).
+2. Confirme com `dig +short supabase.primati.com.br` até aparecer o IP
+   correto.
+3. O acesso final é `https://supabase.primati.com.br:9443` — a porta faz
+   parte da URL, não tem como ficar "escondida" sem mexer no AzuraCast
+   (veja o README para as alternativas que foram descartadas e por quê).
 
 ## Postgres/pooler nunca públicos
 
