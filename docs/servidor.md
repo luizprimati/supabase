@@ -36,6 +36,11 @@ rádio junto). Fora essas portas, os dois convivem sem conflito - o
 Supabase nem publica nada direto no host (só o Nginx do override
 `manual-tls`, na 9443).
 
+Também roda neste mesmo servidor, em repositório separado
+([chat-IA](https://github.com/luizprimati/chat-IA)), uma API própria de
+IA (Ollama) na porta **9444** - mesma lógica de isolamento, outro domínio
+(`ia.primati.com.br`), sem tocar em nada do Supabase/rádio.
+
 ## Configuração ativa (overrides do `run.sh config`)
 
 - `manual-tls` - Nginx próprio na 9443 + container `login` (tela de
@@ -49,6 +54,22 @@ Supabase nem publica nada direto no host (só o Nginx do override
   de risco, feita conscientemente).
 
 Confira o que está ativo agora com `sh run.sh config`.
+
+## Pegadinha de rede já encontrada: NSG "existe" mas não vale nada
+
+Ao abrir a porta 9444 (pro projeto `chat-IA`), a regra foi adicionada
+certinho ao Network Security Group **"Supabase 9443"**, mas a porta
+continuou bloqueada de fora. Causa: esse NSG **nunca esteve realmente
+anexado à VNIC da instância** (campo "Network Security Groups" da VNIC
+aparecia vazio) - ele existe, tem regras, mas não vale nada até ser
+anexado a alguma VNIC. A porta 9443 sempre funcionou porque sua regra de
+verdade está na **Default Security List** do VCN, não nesse NSG.
+
+Se precisar abrir outra porta no futuro: confira primeiro em Compute →
+Instances → esta instância → Attached VNICs → clique na VNIC → veja se
+o campo "Network Security Groups" lista algo. Detalhe completo (sintoma,
+diagnóstico, correção) em
+[chat-IA/README.md](https://github.com/luizprimati/chat-IA#problemas-conhecidos-troubleshooting).
 
 ## Decisões já tomadas (não reabrir sem pedido explícito)
 
@@ -90,3 +111,5 @@ Confira o que está ativo agora com `sh run.sh config`.
   (Postgres + Edge Functions) pro Google Drive.
 - [schemas-panel.md](schemas-panel.md) - expor schemas via PostgREST
   pelo painel `/admin`.
+- [chat-IA](https://github.com/luizprimati/chat-IA) - repositório
+  separado, API de IA (Ollama) rodando no mesmo servidor, porta 9444.
