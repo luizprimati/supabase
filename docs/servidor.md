@@ -133,7 +133,61 @@ Custa segundos e evita o 502.
   `sync-3s` (`volumes/functions/sync-3s/`, não versionada - ver
   `.gitignore`) + as variáveis `API3S_USUARIO`/`API3S_SENHA`/
   `SYNC_SECRET` no `.env` do serviço `functions`. Agendada via `pg_cron`
-  a cada minuto. App consumidor é um projeto Lovable separado.
+  a cada minuto (job `dcan-sync-3s`, segredo guardado no Vault sob o
+  nome `sync_3s_secret` - ver bloco de setup mais abaixo). App consumidor
+  é um projeto Lovable separado.
+
+  Três bugs reais já encontrados e corrigidos nessa integração (só no
+  `sync-3s`, não no schema/tabelas em si) - registrar aqui porque não
+  são óbvios e podem voltar se o código for reescrito do zero:
+
+  1. **Dupla serialização JSON.** A API da 3S às vezes devolve o corpo
+     de `/ListaVeiculos` e `/RetornaDados` como uma *string* JSON
+     contendo JSON dentro (`"[{\"Placa\":...}]"`), em vez do array
+     direto. `/ValidaLogin` não tem esse problema. Corrigido em
+     `Cliente3S.chamar()` (`api3s.ts`): se o primeiro `JSON.parse` der
+     uma string, tenta parsear de novo.
+  2. **Cursor travado em "marcador vazio".** `/RetornaDados` pode
+     devolver uma posição só com `{ idPosicao }`, sem coordenada nem
+     data - um marcador que o código descarta certo (não tem como
+     salvar), mas que precisa avançar o cursor mesmo assim, senão a
+     sincronização fica presa pedindo a mesma janela pra sempre.
+     Corrigido: `converterPosicoes` agora devolve também o maior
+     `idPosicao` visto (`maiorIdVisto`), calculado antes do filtro de
+     completude, e o loop em `index.ts` avança/persiste o cursor por
+     esse valor.
+  3. **Cache de veículos travado em zero.** Efeito colateral do bug 1:
+     o primeiro teste manual (antes do fix da dupla serialização) leu
+     `/ListaVeiculos` como lista vazia (silenciosamente, sem erro) e
+     mesmo assim gravou `veiculos_atualizados_em` - travando o cache de
+     "0 veículos" pelas 6h de `INTERVALO_VEICULOS_MS`. Resolvido uma
+     vez com `delete from dcan.sync_3s where chave =
+     'veiculos_atualizados_em';` pra forçar nova tentativa. Se voltar a
+     acontecer (ex.: depois de outro bug na API), o sintoma é
+     `veiculosAtualizados: 0` persistente nas respostas do `sync-3s`
+     mesmo com veículos reais existindo na 3S - o reset manual é a
+     saída.
+
+  Setup do agendamento (rodar uma vez, já feito neste servidor):
+
+  ```bash
+  SYNC_SECRET="$(grep '^SYNC_SECRET=' ~/supabase/.env | cut -d= -f2-)" && \
+  cd ~/supabase && \
+  docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -v secret="$SYNC_SECRET" <<'SQL'
+  create extension if not exists pg_cron;
+  create extension if not exists pg_net with schema extensions;
+  create extension if not exists supabase_vault cascade;
+  select vault.create_secret(:'secret', 'sync_3s_secret', 'x-sync-secret da Edge Function sync-3s (DCAN)');
+  select cron.schedule('dcan-sync-3s', '* * * * *', $$
+    select net.http_post(
+      url := 'http://kong:8000/functions/v1/sync-3s',
+      headers := jsonb_build_object('Content-Type', 'application/json',
+        'x-sync-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'sync_3s_secret')),
+      body := '{}'::jsonb, timeout_milliseconds := 55000
+    ) as request_id;
+  $$);
+  SQL
+  ```
 
 ## Outros docs deste projeto
 
