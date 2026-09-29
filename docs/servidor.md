@@ -71,6 +71,33 @@ o campo "Network Security Groups" lista algo. Detalhe completo (sintoma,
 diagnóstico, correção) em
 [chat-IA/README.md](https://github.com/luizprimati/chat-IA#problemas-conhecidos-troubleshooting).
 
+## Pegadinha já encontrada (de novo): Nginx com IP velho do `studio`/`rest`
+
+O Nginx do override `manual-tls` (`supabase-nginx-manual`) resolve o
+endereço de rede de `studio`/`rest` **uma vez só, quando sobe**, e não
+percebe sozinho se esses containers forem recriados depois - continua
+mandando tráfego pro endereço antigo, que o Docker pode até já ter
+reaproveitado para outro container. Resultado: `502 Bad Gateway` na home
+inteira (`https://supabase.primati.com.br:9443/`), mesmo com todos os
+containers "Up (healthy)" no `docker compose ps`.
+
+Já aconteceu duas vezes por dois motivos diferentes:
+1. A aba Schemas publicando um schema (recria `rest`+`studio` de
+   propósito) - já corrigido, o próprio painel reinicia o Nginx depois
+   (ver [schemas-panel.md](schemas-panel.md)).
+2. **Qualquer outro `docker compose up -d <serviço>` que acabe
+   recriando `studio`/`rest`/`envoy` como efeito colateral** (por
+   dependência) - isso NÃO reinicia o Nginx sozinho. Aconteceu ao
+   recriar só o `functions` (integração 3S/DCAN): o compose também
+   recriou `studio` e `envoy` por tabela, e a home ficou fora do ar até
+   reiniciar o Nginx manualmente.
+
+**Regra geral: depois de qualquer `docker compose up -d` (ou
+`sh run.sh recreate`) que toque em `studio`, `rest`, `envoy`/`api-gw` ou
+`login`, direto ou como efeito colateral, rode `sh run.sh restart
+nginx`** - mesmo que o `docker compose` não tenha reclamado de nada.
+Custa segundos e evita o 502.
+
 ## Decisões já tomadas (não reabrir sem pedido explícito)
 
 - **Continuar na porta 9443**, não migrar para a 443 padrão - migrar
@@ -101,6 +128,12 @@ diagnóstico, correção) em
   usando o schema **`editora`**, exposto via PostgREST (`PGRST_DB_SCHEMAS`
   inclui `editora` + GRANTs aplicados). Se pedir mais schemas expostos no
   futuro, use a aba Schemas em `/admin` em vez de mexer manualmente.
+- Projeto **DCAN** (rastreamento de frota via API 3S/DataExportAPI) usa o
+  schema **`dcan`** (exposto do mesmo jeito) + a Edge Function
+  `sync-3s` (`volumes/functions/sync-3s/`, não versionada - ver
+  `.gitignore`) + as variáveis `API3S_USUARIO`/`API3S_SENHA`/
+  `SYNC_SECRET` no `.env` do serviço `functions`. Agendada via `pg_cron`
+  a cada minuto. App consumidor é um projeto Lovable separado.
 
 ## Outros docs deste projeto
 
