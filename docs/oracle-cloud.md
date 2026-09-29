@@ -44,9 +44,19 @@ Resultado: **nenhuma configuração do AzuraCast é tocada.**
 
 ### Security List / NSG (console OCI)
 
+Neste servidor, quem controla de verdade as portas é a **Default
+Security List** do VCN — existe também um Network Security Group
+chamado "Supabase 9443", mas ele **não está anexado a nenhuma VNIC**
+(confirmado ao investigar a porta 9444 do projeto `chat-IA` — ver
+[servidor.md](servidor.md#pegadinha-de-rede-já-encontrada-nsg-existe-mas-não-vale-nada)),
+então uma regra adicionada só nele não tem efeito nenhum.
+
 **Menu ☰ → Networking → Virtual Cloud Networks → (sua VCN) → Security
-Lists** (ou **Network Security Groups**, se a instância usa NSG — confira
-em **Compute → Instances → (sua instância) → Attached VNICs**).
+Lists → Default Security List** → adicione o Ingress ali. Se preferir
+usar um NSG em vez da Security List, primeiro confirme que ele está
+anexado à VNIC (**Compute → Instances → sua instância → Attached
+VNICs → clique na VNIC → campo "Network Security Groups"**) - senão a
+regra fica só decorativa.
 
 Adicione um Ingress:
 
