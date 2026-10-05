@@ -119,8 +119,8 @@ function trySaveUsers(res, users) {
 // fora de volumes/functions (não entram no backup do Drive nem aparecem no
 // editor) que o dispatcher (volumes/functions/main/index.ts) relê a cada
 // requisição e repassa às funções como variáveis de ambiente - salvar aqui
-// vale na hora, sem reiniciar container. Os valores nunca voltam pro
-// navegador depois de salvos.
+// vale na hora, sem reiniciar container. A listagem nunca traz valores; um
+// valor só volta pro navegador quando o admin pede aquele secret.
 const FUNCTION_SECRETS_FILE = process.env.FUNCTION_SECRETS_FILE || '/app/functions-secrets/secrets.json';
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,99}$/;
 const SECRET_MAX_LENGTH = 10000;
@@ -1801,6 +1801,8 @@ ${THEME_CSS}
   .row-actions button:hover { border-color: var(--accent); color: var(--accent); }
   .row-actions button.danger:hover { border-color: var(--danger-text); color: var(--danger-text); }
   .row-actions button.icon-only { padding: 6px; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; }
+  .secret-value { font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; color: var(--text-muted); }
+  .secret-value.revealed { color: var(--text-strong); }
   .confirm-popover {
     position: fixed; z-index: 10000; background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px 16px; width: 240px; box-shadow: 0 12px 32px var(--shadow);
@@ -1901,14 +1903,13 @@ ${THEME_CSS}
       </div>
       <div class="msg" id="secretsMsg"></div>
       <table>
-        <thead><tr><th>Nome</th><th>Atualizado em</th><th></th></tr></thead>
+        <thead><tr><th>Nome</th><th>Valor</th><th>Atualizado em</th><th></th></tr></thead>
         <tbody id="secretsBody"></tbody>
       </table>
       <p class="hint" style="margin-top:16px;">
-        Nas funções, leia com <code>Deno.env.get("NOME")</code>. Os valores não são mostrados
-        depois de salvos - para mudar, salve um novo valor. Se o mesmo nome também existir no
-        <code>.env</code> do servidor, vale o valor daqui. Nomes começando com <code>SUPABASE_</code>
-        são reservados.
+        Nas funções, leia com <code>Deno.env.get("NOME")</code>. Clique no olho para ver o valor
+        gravado. Se o mesmo nome também existir no <code>.env</code> do servidor, vale o valor
+        daqui. Nomes começando com <code>SUPABASE_</code> são reservados.
       </p>
     </div>
 
@@ -2938,6 +2939,16 @@ ${THEME_CSS}
       return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
     }
 
+    var SECRET_MASK = '••••••••••••';
+    var EYE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    var EYE_OFF_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+
+    // Busca o valor de um secret só quando pedido (nunca vem na listagem).
+    function fetchSecretValue(name) {
+      return fetch('/admin/api/secrets/' + encodeURIComponent(name), { cache: 'no-store' })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); });
+    }
+
     function openSecretForm(name) {
       secretFormMsg.style.display = 'none';
       secretForm.reset();
@@ -2945,8 +2956,23 @@ ${THEME_CSS}
       document.getElementById('secretFormTitle').textContent = name ? 'Trocar valor de ' + name : 'Novo secret';
       secretNameField.value = name || '';
       secretNameField.disabled = !!name;
+      secretValueField.placeholder = '';
       secretOverlay.classList.add('open');
       (name ? secretValueField : secretNameField).focus();
+      if (!name) return;
+      // Abre com o valor atual, para conferir antes de trocar.
+      secretValueField.placeholder = 'carregando valor atual...';
+      fetchSecretValue(name).then(function (res) {
+        secretValueField.placeholder = '';
+        if (editingSecretName !== name) return;
+        if (!res.ok) {
+          secretFormMsg.textContent = res.d.error || 'Não foi possível carregar o valor atual.';
+          secretFormMsg.className = 'msg error';
+          secretFormMsg.style.display = 'block';
+          return;
+        }
+        if (!secretValueField.value) secretValueField.value = res.d.value;
+      });
     }
     function closeSecretForm() { secretOverlay.classList.remove('open'); }
 
@@ -2962,7 +2988,7 @@ ${THEME_CSS}
           body.innerHTML = '';
           if (!res.d.length) {
             var empty = document.createElement('tr');
-            empty.innerHTML = '<td colspan="3" style="color:var(--text-muted);">Nenhum secret cadastrado.</td>';
+            empty.innerHTML = '<td colspan="4" style="color:var(--text-muted);">Nenhum secret cadastrado.</td>';
             body.appendChild(empty);
             return;
           }
@@ -2971,16 +2997,38 @@ ${THEME_CSS}
             var nameTd = document.createElement('td');
             nameTd.style.fontFamily = 'ui-monospace, Menlo, monospace';
             nameTd.textContent = s.name;
+            var valueTd = document.createElement('td');
+            valueTd.className = 'secret-value';
+            valueTd.textContent = SECRET_MASK;
             var dateTd = document.createElement('td');
             dateTd.textContent = formatSecretDate(s.updatedAt);
             var actionsTd = document.createElement('td');
             actionsTd.innerHTML = '<div class="row-actions">' +
+              '<button data-action="reveal" class="icon-only" title="Mostrar valor" aria-label="Mostrar valor">' + EYE_ICON + '</button>' +
               '<button data-action="edit" class="icon-only" title="Trocar valor" aria-label="Trocar valor">' + PENCIL_ICON + '</button>' +
               '<button data-action="delete" class="icon-only danger" title="Excluir" aria-label="Excluir">' + TRASH_ICON + '</button>' +
               '</div>';
             tr.appendChild(nameTd);
+            tr.appendChild(valueTd);
             tr.appendChild(dateTd);
             tr.appendChild(actionsTd);
+            var revealBtn = tr.querySelector('[data-action="reveal"]');
+            revealBtn.addEventListener('click', function () {
+              if (valueTd.classList.contains('revealed')) {
+                valueTd.classList.remove('revealed');
+                valueTd.textContent = SECRET_MASK;
+                revealBtn.innerHTML = EYE_ICON;
+                revealBtn.title = 'Mostrar valor';
+                return;
+              }
+              fetchSecretValue(s.name).then(function (res) {
+                if (!res.ok) { secretsShowMsg(res.d.error || 'Não foi possível ler o valor.', 'error'); return; }
+                valueTd.classList.add('revealed');
+                valueTd.textContent = res.d.value;
+                revealBtn.innerHTML = EYE_OFF_ICON;
+                revealBtn.title = 'Esconder valor';
+              });
+            });
             tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openSecretForm(s.name); });
             tr.querySelector('[data-action="delete"]').addEventListener('click', function () {
               if (!confirm('Excluir o secret "' + s.name + '"? As funções que usam esse nome deixam de recebê-lo na hora.')) return;
@@ -4130,7 +4178,8 @@ function handleRequest(req, res) {
       return;
     }
 
-    // GET /admin/api/secrets - só nomes e data, nunca os valores
+    // GET /admin/api/secrets - só nomes e data, nunca os valores (ver GET
+    // de um secret específico abaixo)
     if (url.pathname === '/admin/api/secrets' && req.method === 'GET') {
       const list = Object.keys(secrets).sort().map((name) => ({ name, updatedAt: secrets[name].updatedAt || null }));
       sendJson(res, 200, list);
@@ -4159,6 +4208,18 @@ function handleRequest(req, res) {
           return false;
         }
       };
+
+      // GET /admin/api/secrets/<NOME> - valor de UM secret, só quando o admin
+      // pede (botão de olho / formulário de troca). Não dá a ninguém nada
+      // que a sessão de admin já não alcance (ela pode editar uma função que
+      // devolve o ambiente); no-store evita o valor ficar no cache do
+      // navegador.
+      if (req.method === 'GET') {
+        if (!secrets[name]) { sendJson(res, 404, { error: 'Secret não encontrado.' }); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ name, value: secrets[name].value, updatedAt: secrets[name].updatedAt || null }));
+        return;
+      }
 
       // PUT /admin/api/secrets/<NOME> { value } - cria ou troca o valor
       if (req.method === 'PUT') {

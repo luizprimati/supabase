@@ -199,8 +199,10 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   pasta das funções, então não entra no backup do Drive nem no Git) e o
   dispatcher (`volumes/functions/main/index.ts`) relê esse arquivo a cada
   requisição e entrega os valores às funções, que leem com
-  `Deno.env.get("NOME")`. Os valores nunca voltam pra tela depois de
-  salvos. Se o mesmo nome também existir no `.env`, vale o do painel.
+  `Deno.env.get("NOME")`. A lista mostra os valores mascarados; o botão
+  de olho busca e mostra o valor gravado de um secret (só quando você
+  clica, sem cache no navegador), e "Trocar valor" abre com o valor atual
+  preenchido. Se o mesmo nome também existir no `.env`, vale o do painel.
   Nomes reservados (`SUPABASE_*`, `DENO_*`, `JWT_SECRET`, `VERIFY_JWT`)
   são recusados, pra ninguém sobrescrever as chaves internas.
 
