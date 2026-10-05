@@ -473,6 +473,13 @@ services:
       API3S_URL: ${API3S_URL:-}
       API3S_FUSO: ${API3S_FUSO:-}
       DCAN_SCHEMA: ${DCAN_SCHEMA:-}
+
+      # Integração KMM/MultiTMS (projeto DCAN, função sync-kmm) - mesma regra.
+      KMM_USUARIO: ${KMM_USUARIO:-}
+      KMM_SENHA: ${KMM_SENHA:-}
+      KMM_TOKEN: ${KMM_TOKEN:-}
+      KMM_CLIENT_ID: ${KMM_CLIENT_ID:-}
+      KMM_URL: ${KMM_URL:-}
     command:
       [
         "start",

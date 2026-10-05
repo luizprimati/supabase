@@ -168,6 +168,21 @@ Custa segundos e evita o 502.
      mesmo com veículos reais existindo na 3S - o reset manual é a
      saída.
 
+  Rotina de km por placa: `sync-3s` grava o hodômetro em
+  `dcan.posicoes_3s.odometro` e o job `dcan-km-veiculos` (pg_cron, a cada
+  5 min, criado pela migração `20261003200000_dcan_veiculos_km.sql` do
+  repositório `mapa-calor-dcan`) grava em `dcan.veiculos_km` só quando o
+  km muda. **A cópia do `sync-3s` no repositório `mapa-calor-dcan` não
+  tem as correções 1 e 2 acima** - nunca copie de lá por cima da versão
+  do servidor; aplique só a mudança nova em cima da versão daqui.
+
+  Segunda Edge Function do projeto: `sync-kmm`
+  (`volumes/functions/sync-kmm/`, também não versionada), chamada pelo
+  botão "Sincronizar KMM" da tela de Clientes do app. Só lê o cadastro de
+  pessoas da API do KMM/MultiTMS e devolve as linhas pro app. Confere a
+  sessão do app em `dcan.sessao_atual` antes de qualquer consulta.
+  Credenciais em `KMM_USUARIO`/`KMM_SENHA` (ou `KMM_TOKEN`) no `.env`.
+
   Setup do agendamento (rodar uma vez, já feito neste servidor):
 
   ```bash
