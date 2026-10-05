@@ -12,6 +12,7 @@ volumes/functions/hello/**
 .env
 volumes/proxy/manual-tls/users.json
 volumes/proxy/manual-tls/backup-config.json
+volumes/functions-secrets/
 test.http
 docker-compose.override.yml
 .supabase-version

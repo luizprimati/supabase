@@ -180,8 +180,17 @@ Custa segundos e evita o 502.
   (`volumes/functions/sync-kmm/`, também não versionada), chamada pelo
   botão "Sincronizar KMM" da tela de Clientes do app. Só lê o cadastro de
   pessoas da API do KMM/MultiTMS e devolve as linhas pro app. Confere a
-  sessão do app em `dcan.sessao_atual` antes de qualquer consulta.
-  Credenciais em `KMM_USUARIO`/`KMM_SENHA` (ou `KMM_TOKEN`) no `.env`.
+  sessão do app em `dcan.sessao_atual` antes de qualquer consulta. A API
+  do KMM autentica só pelo header `Token` (chave fixa emitida pela
+  Multisoftware, `KMM_TOKEN`) - o login por usuário/senha em
+  `/CadastroUnificado/ObterTokenIntegracao` exige o próprio `Token` +
+  `client_id` e devolve 500 vazio sem eles.
+
+  **Secrets de Edge Functions novos vão na aba Secrets do `/admin`**, não
+  no `.env`: valem na hora, sem editar `docker-compose.yml` nem recriar o
+  container (ver README, aba Secrets). As variáveis antigas da 3S/KMM no
+  `.env` continuam funcionando; se o mesmo nome existir nos dois, vale o
+  do painel.
 
   Setup do agendamento (rodar uma vez, já feito neste servidor):
 

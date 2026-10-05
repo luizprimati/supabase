@@ -7,6 +7,53 @@ const SUPABASE_JWKS = parseJwks(Deno.env.get('SUPABASE_JWKS'))
 const LOCAL_JWKS = SUPABASE_JWKS ? jose.createLocalJWKSet(SUPABASE_JWKS) : null
 const VERIFY_JWT = Deno.env.get('VERIFY_JWT') === 'true'
 
+// Secrets gravados pelo painel /admin (aba Secrets, login-server.js). Relidos
+// a cada requisição (com cache por mtime/tamanho) para que salvar um secret
+// valha na hora, sem reiniciar o container. Arquivo ausente = nenhum secret.
+const SECRETS_FILE = Deno.env.get('FUNCTION_SECRETS_FILE') ?? '/home/deno/secrets/secrets.json'
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/
+let secretsCache = { key: '', values: {} as Record<string, string> }
+let lastSecretsError = ''
+
+// Mesma lista do login-server.js - um secret nunca sobrescreve as
+// variáveis que o próprio runtime/Supabase usa.
+function isReservedSecretName(name: string) {
+  return name.startsWith('SUPABASE_') || name.startsWith('DENO_') || name.startsWith('EDGE_RUNTIME') ||
+    name === 'JWT_SECRET' || name === 'VERIFY_JWT'
+}
+
+function reportSecretsError(message: string) {
+  if (message === lastSecretsError) return
+  lastSecretsError = message
+  console.error(`Secrets do painel: ${message}`)
+}
+
+function readPanelSecrets(): Record<string, string> {
+  let key: string
+  try {
+    const info = Deno.statSync(SECRETS_FILE)
+    key = `${info.mtime?.getTime() ?? 0}:${info.size}`
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) reportSecretsError(String(e))
+    return {}
+  }
+  if (key === secretsCache.key) return secretsCache.values
+  try {
+    const parsed = JSON.parse(Deno.readTextFileSync(SECRETS_FILE))
+    const values: Record<string, string> = {}
+    for (const [name, entry] of Object.entries(parsed?.secrets ?? {})) {
+      const value = (entry as { value?: unknown } | null)?.value
+      if (SECRET_NAME_RE.test(name) && !isReservedSecretName(name) && typeof value === 'string') values[name] = value
+    }
+    secretsCache = { key, values }
+    lastSecretsError = ''
+    return values
+  } catch (e) {
+    reportSecretsError(String(e))
+    return secretsCache.values
+  }
+}
+
 type AuthFailure = {
   code: RequestErrors
   message?: string
@@ -208,8 +255,10 @@ Deno.serve(async (req: Request) => {
   const importMapPath = `/home/deno/functions/deno.jsonc`
   // SUPABASE_FUNCTION_SLUG is listed after the container env snapshot so
   // nothing in it can shadow the value, and it is per-request because only this
-  // worker knows which function the request resolved to.
-  const envVarsObj = { ...Deno.env.toObject(), SUPABASE_FUNCTION_SLUG: service_name }
+  // worker knows which function the request resolved to. Panel secrets come
+  // after the container env, so a secret saved in /admin wins over the same
+  // name in .env.
+  const envVarsObj = { ...Deno.env.toObject(), ...readPanelSecrets(), SUPABASE_FUNCTION_SLUG: service_name }
   const envVars = Object.keys(envVarsObj).map((k) => [k, envVarsObj[k]])
 
   try {

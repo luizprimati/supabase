@@ -115,6 +115,44 @@ function trySaveUsers(res, users) {
   }
 }
 
+// --- Secrets das Edge Functions (aba Secrets em /admin). Ficam num JSON
+// fora de volumes/functions (não entram no backup do Drive nem aparecem no
+// editor) que o dispatcher (volumes/functions/main/index.ts) relê a cada
+// requisição e repassa às funções como variáveis de ambiente - salvar aqui
+// vale na hora, sem reiniciar container. Os valores nunca voltam pro
+// navegador depois de salvos.
+const FUNCTION_SECRETS_FILE = process.env.FUNCTION_SECRETS_FILE || '/app/functions-secrets/secrets.json';
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,99}$/;
+const SECRET_MAX_LENGTH = 10000;
+
+// Mesma lista do dispatcher (main/index.ts) - variáveis que o próprio
+// runtime/Supabase usa e que um secret não pode sobrescrever.
+function isReservedSecretName(name) {
+  return name.startsWith('SUPABASE_') || name.startsWith('DENO_') || name.startsWith('EDGE_RUNTIME') ||
+    name === 'JWT_SECRET' || name === 'VERIFY_JWT';
+}
+
+function readFunctionSecrets() {
+  let raw;
+  try {
+    raw = fs.readFileSync(FUNCTION_SECRETS_FILE, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw e;
+  }
+  const parsed = JSON.parse(raw);
+  return parsed && typeof parsed.secrets === 'object' && parsed.secrets ? parsed.secrets : {};
+}
+
+// Grava num arquivo temporário e renomeia: o dispatcher nunca lê um JSON
+// pela metade.
+function writeFunctionSecrets(secrets) {
+  fs.mkdirSync(path.dirname(FUNCTION_SECRETS_FILE), { recursive: true, mode: 0o700 });
+  const tmp = `${FUNCTION_SECRETS_FILE}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ secrets }, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, FUNCTION_SECRETS_FILE);
+}
+
 // --- Edge Functions: editor simples que escreve direto nos arquivos que
 // o dispatcher (volumes/functions/main/index.ts) já lê do disco a cada
 // requisição - editar aqui tem efeito imediato, sem reiniciar container.
@@ -1820,6 +1858,7 @@ ${THEME_CSS}
     <div class="tabs">
       <button class="tab-btn active" data-tab="users" type="button">Usuários</button>
       <button class="tab-btn" data-tab="functions" type="button">Edge Functions</button>
+      <button class="tab-btn" data-tab="secrets" type="button">Secrets</button>
       <button class="tab-btn" data-tab="settings" type="button">Backup</button>
       <button class="tab-btn" data-tab="schemas" type="button">Schemas</button>
     </div>
@@ -1850,6 +1889,27 @@ ${THEME_CSS}
         <thead><tr><th>Nome</th><th>URL</th><th></th></tr></thead>
         <tbody id="functionsBody"></tbody>
       </table>
+    </div>
+
+    <div class="tab-panel" id="secretsPanel">
+      <div class="toolbar">
+        <div>
+          <h1>Secrets</h1>
+          <p class="sub">Variáveis de ambiente das Edge Functions - valem na hora, sem reiniciar nada.</p>
+        </div>
+        <button class="btn btn-primary" id="newSecretBtn" type="button">Novo secret</button>
+      </div>
+      <div class="msg" id="secretsMsg"></div>
+      <table>
+        <thead><tr><th>Nome</th><th>Atualizado em</th><th></th></tr></thead>
+        <tbody id="secretsBody"></tbody>
+      </table>
+      <p class="hint" style="margin-top:16px;">
+        Nas funções, leia com <code>Deno.env.get("NOME")</code>. Os valores não são mostrados
+        depois de salvos - para mudar, salve um novo valor. Se o mesmo nome também existir no
+        <code>.env</code> do servidor, vale o valor daqui. Nomes começando com <code>SUPABASE_</code>
+        são reservados.
+      </p>
     </div>
 
     <div class="tab-panel" id="settingsPanel">
@@ -2015,6 +2075,25 @@ ${THEME_CSS}
     </div>
   </div>
 
+  <div class="overlay" id="secretOverlay">
+    <div class="card">
+      <h2 id="secretFormTitle">Novo secret</h2>
+      <div class="msg" id="secretFormMsg"></div>
+      <form id="secretForm">
+        <label for="secret-name">Nome</label>
+        <input type="text" id="secret-name" required autocomplete="off" spellcheck="false" placeholder="ex: KMM_TOKEN" style="text-transform:uppercase;">
+        <p class="hint">Letras maiúsculas, números e "_", começando com letra.</p>
+        <label for="secret-value">Valor</label>
+        <input type="text" id="secret-value" required autocomplete="off" spellcheck="false">
+        <p class="hint" id="secretValueHint">Espaços no começo e no fim são removidos.</p>
+        <div class="card-actions">
+          <button type="button" class="btn" id="secretCancelBtn">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="overlay" id="fnOverlay">
     <div class="card editor-card">
       <button type="button" class="close" id="fnCloseBtn" aria-label="Fechar">&times;</button>
@@ -2154,6 +2233,7 @@ ${THEME_CSS}
     var tabPanels = {
       users: document.getElementById('usersPanel'),
       functions: document.getElementById('functionsPanel'),
+      secrets: document.getElementById('secretsPanel'),
       settings: document.getElementById('settingsPanel'),
       schemas: document.getElementById('schemasPanel'),
     };
@@ -2167,6 +2247,9 @@ ${THEME_CSS}
         if (btn.dataset.tab === 'functions' && !functionsLoaded) {
           functionsLoaded = true;
           loadFunctions();
+        }
+        if (btn.dataset.tab === 'secrets') {
+          loadSecrets();
         }
         if (btn.dataset.tab === 'settings') {
           loadBackupConfig();
@@ -2832,6 +2915,112 @@ ${THEME_CSS}
         });
       });
     }
+
+    // --- Aba Secrets ---
+    var secretOverlay = document.getElementById('secretOverlay');
+    var secretForm = document.getElementById('secretForm');
+    var secretNameField = document.getElementById('secret-name');
+    var secretValueField = document.getElementById('secret-value');
+    var secretFormMsg = document.getElementById('secretFormMsg');
+    var editingSecretName = null;
+
+    function secretsShowMsg(text, kind) {
+      var el = document.getElementById('secretsMsg');
+      el.textContent = text;
+      el.className = 'msg ' + kind;
+      el.style.display = 'block';
+    }
+    function secretsHideMsg() { document.getElementById('secretsMsg').style.display = 'none'; }
+
+    function formatSecretDate(iso) {
+      if (!iso) return '-';
+      var d = new Date(iso);
+      return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
+    }
+
+    function openSecretForm(name) {
+      secretFormMsg.style.display = 'none';
+      secretForm.reset();
+      editingSecretName = name;
+      document.getElementById('secretFormTitle').textContent = name ? 'Trocar valor de ' + name : 'Novo secret';
+      secretNameField.value = name || '';
+      secretNameField.disabled = !!name;
+      secretOverlay.classList.add('open');
+      (name ? secretValueField : secretNameField).focus();
+    }
+    function closeSecretForm() { secretOverlay.classList.remove('open'); }
+
+    document.getElementById('newSecretBtn').addEventListener('click', function () { openSecretForm(null); });
+    document.getElementById('secretCancelBtn').addEventListener('click', closeSecretForm);
+
+    function loadSecrets() {
+      fetch('/admin/api/secrets')
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { secretsShowMsg(res.d.error || 'Não foi possível carregar os secrets.', 'error'); return; }
+          var body = document.getElementById('secretsBody');
+          body.innerHTML = '';
+          if (!res.d.length) {
+            var empty = document.createElement('tr');
+            empty.innerHTML = '<td colspan="3" style="color:var(--text-muted);">Nenhum secret cadastrado.</td>';
+            body.appendChild(empty);
+            return;
+          }
+          res.d.forEach(function (s) {
+            var tr = document.createElement('tr');
+            var nameTd = document.createElement('td');
+            nameTd.style.fontFamily = 'ui-monospace, Menlo, monospace';
+            nameTd.textContent = s.name;
+            var dateTd = document.createElement('td');
+            dateTd.textContent = formatSecretDate(s.updatedAt);
+            var actionsTd = document.createElement('td');
+            actionsTd.innerHTML = '<div class="row-actions">' +
+              '<button data-action="edit" class="icon-only" title="Trocar valor" aria-label="Trocar valor">' + PENCIL_ICON + '</button>' +
+              '<button data-action="delete" class="icon-only danger" title="Excluir" aria-label="Excluir">' + TRASH_ICON + '</button>' +
+              '</div>';
+            tr.appendChild(nameTd);
+            tr.appendChild(dateTd);
+            tr.appendChild(actionsTd);
+            tr.querySelector('[data-action="edit"]').addEventListener('click', function () { openSecretForm(s.name); });
+            tr.querySelector('[data-action="delete"]').addEventListener('click', function () {
+              if (!confirm('Excluir o secret "' + s.name + '"? As funções que usam esse nome deixam de recebê-lo na hora.')) return;
+              fetch('/admin/api/secrets/' + encodeURIComponent(s.name), { method: 'DELETE' })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+                .then(function (delRes) {
+                  if (!delRes.ok) { secretsShowMsg(delRes.d.error || 'Não foi possível excluir.', 'error'); return; }
+                  secretsShowMsg('Secret "' + s.name + '" excluído.', 'ok');
+                  setTimeout(secretsHideMsg, 3000);
+                  loadSecrets();
+                });
+            });
+            body.appendChild(tr);
+          });
+        });
+    }
+
+    secretForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      secretFormMsg.style.display = 'none';
+      var name = (editingSecretName || secretNameField.value).trim().toUpperCase();
+      fetch('/admin/api/secrets/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: secretValueField.value }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) {
+            secretFormMsg.textContent = res.d.error || 'Não foi possível salvar.';
+            secretFormMsg.className = 'msg error';
+            secretFormMsg.style.display = 'block';
+            return;
+          }
+          closeSecretForm();
+          secretsShowMsg('Secret "' + name + '" salvo - já vale para as funções.', 'ok');
+          setTimeout(secretsHideMsg, 3000);
+          loadSecrets();
+        });
+    });
 
     // --- Aba Schemas ---
     function schemasShowMsg(text, kind) {
@@ -3897,6 +4086,78 @@ function handleRequest(req, res) {
       runBackupInBackground();
       sendJson(res, 200, { started: true });
       return;
+    }
+  }
+
+  // --- Secrets das Edge Functions, também restrito a role === 'admin' ---
+  if (url.pathname.startsWith('/admin/api/secrets')) {
+    const user = getSessionUser(req);
+    if (!isAdmin(user)) {
+      sendJson(res, user ? 403 : 401, { error: 'Acesso restrito a administradores.' });
+      return;
+    }
+
+    let secrets;
+    try {
+      secrets = readFunctionSecrets();
+    } catch (e) {
+      console.error(`Não foi possível ler ${FUNCTION_SECRETS_FILE}: ${e.message}`);
+      sendJson(res, 500, { error: 'Não foi possível ler o arquivo de secrets.' });
+      return;
+    }
+
+    // GET /admin/api/secrets - só nomes e data, nunca os valores
+    if (url.pathname === '/admin/api/secrets' && req.method === 'GET') {
+      const list = Object.keys(secrets).sort().map((name) => ({ name, updatedAt: secrets[name].updatedAt || null }));
+      sendJson(res, 200, list);
+      return;
+    }
+
+    const secretPrefix = '/admin/api/secrets/';
+    if (url.pathname.startsWith(secretPrefix)) {
+      const name = decodeURIComponent(url.pathname.slice(secretPrefix.length));
+      if (!SECRET_NAME_RE.test(name)) {
+        sendJson(res, 400, { error: 'Nome inválido: use letras maiúsculas, números e "_", começando com letra.' });
+        return;
+      }
+      if (isReservedSecretName(name)) {
+        sendJson(res, 400, { error: `"${name}" é reservado pelo Supabase e não pode ser definido aqui.` });
+        return;
+      }
+
+      const save = () => {
+        try {
+          writeFunctionSecrets(secrets);
+          return true;
+        } catch (e) {
+          console.error(`Não foi possível gravar ${FUNCTION_SECRETS_FILE}: ${e.message}`);
+          sendJson(res, 500, { error: 'Não foi possível salvar - a pasta functions-secrets está montada no container?' });
+          return false;
+        }
+      };
+
+      // PUT /admin/api/secrets/<NOME> { value } - cria ou troca o valor
+      if (req.method === 'PUT') {
+        collectBody(req, (body) => {
+          let data;
+          try { data = JSON.parse(body); } catch { sendJson(res, 400, { error: 'JSON inválido.' }); return; }
+          const value = typeof data.value === 'string' ? data.value.trim() : '';
+          if (!value) { sendJson(res, 400, { error: 'Informe o valor.' }); return; }
+          if (value.length > SECRET_MAX_LENGTH) { sendJson(res, 400, { error: 'Valor longo demais.' }); return; }
+          secrets[name] = { value, updatedAt: new Date().toISOString() };
+          if (!save()) return;
+          sendJson(res, 200, { name, updatedAt: secrets[name].updatedAt });
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        if (!secrets[name]) { sendJson(res, 404, { error: 'Secret não encontrado.' }); return; }
+        delete secrets[name];
+        if (!save()) return;
+        sendJson(res, 200, { ok: true });
+        return;
+      }
     }
   }
 

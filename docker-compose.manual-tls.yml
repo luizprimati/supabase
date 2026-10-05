@@ -101,6 +101,18 @@ services:
       # versionado (tem client secret + refresh token); crie a partir do
       # .example.
       - ./volumes/proxy/manual-tls/backup-config.json:/app/backup-config.json
+      # Secrets das Edge Functions (aba Secrets em /admin) - gravável aqui,
+      # só leitura no container "functions" (abaixo). Pasta, não arquivo:
+      # montar um arquivo que ainda não existe faz o Docker criar uma pasta
+      # no lugar. Nunca versionada nem incluída no backup do Drive.
+      - ./volumes/functions-secrets:/app/functions-secrets
+
+  # O dispatcher (volumes/functions/main/index.ts) relê o secrets.json a
+  # cada requisição e repassa às funções - por isso salvar na aba Secrets
+  # vale na hora, sem reiniciar este container.
+  functions:
+    volumes:
+      - ./volumes/functions-secrets:/home/deno/secrets:ro
 
   nginx:
     container_name: supabase-nginx-manual

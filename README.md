@@ -122,7 +122,7 @@ Isso imprime `{"salt": "...", "hash": "..."}`. Edite
 
 `"role"` é `"admin"` ou `"user"` (padrão se omitido). **Pelo menos um
 usuário precisa ser `"admin"`** — é ele quem consegue acessar
-`https://SEU_DOMINIO:9443/admin`, um painel com quatro abas:
+`https://SEU_DOMINIO:9443/admin`, um painel com cinco abas:
 
 - **Usuários** — CRUD para cadastrar, editar (senha/papel) e excluir os
   demais usuários direto pelo navegador, sem precisar mexer em
@@ -191,6 +191,18 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   função, então isso funciona sem nenhuma mudança de infraestrutura. O
   `index.ts` não pode ser excluído por ali (exclua a função inteira se
   quiser removê-lo).
+
+- **Secrets** — variáveis de ambiente das Edge Functions (tokens, senhas
+  de APIs externas), equivalente ao `supabase secrets set` do hospedado.
+  Criar, trocar o valor ou excluir **vale na hora, sem reiniciar nada**:
+  o painel grava em `volumes/functions-secrets/secrets.json` (fora da
+  pasta das funções, então não entra no backup do Drive nem no Git) e o
+  dispatcher (`volumes/functions/main/index.ts`) relê esse arquivo a cada
+  requisição e entrega os valores às funções, que leem com
+  `Deno.env.get("NOME")`. Os valores nunca voltam pra tela depois de
+  salvos. Se o mesmo nome também existir no `.env`, vale o do painel.
+  Nomes reservados (`SUPABASE_*`, `DENO_*`, `JWT_SECRET`, `VERIFY_JWT`)
+  são recusados, pra ninguém sobrescrever as chaves internas.
 
 - **Backup** — backup automático do banco (Postgres, via
   `pg_dump`) e das Edge Functions (`.tar.gz`) pro Google Drive da sua
