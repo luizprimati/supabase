@@ -121,6 +121,12 @@ Custa segundos e evita o 502.
 - `users.json`/`backup-config.json` (senhas de login do `/admin`,
   credenciais do Google Drive): `volumes/proxy/manual-tls/`, não
   versionados.
+- Secrets das Edge Functions (`API3S_*`, `SYNC_SECRET`, `KMM_*`...): aba
+  Secrets do `/admin`, gravados em
+  `volumes/functions-secrets/secrets.json` (dono `root`, permissão 600,
+  não versionado nem incluído no backup do Drive). Pra usar um valor num
+  teste no terminal, sem abrir o painel:
+  `sudo jq -r '.secrets.SYNC_SECRET.value' ~/supabase/volumes/functions-secrets/secrets.json`.
 
 ## Integrações externas conhecidas
 
@@ -131,8 +137,8 @@ Custa segundos e evita o 502.
 - Projeto **DCAN** (rastreamento de frota via API 3S/DataExportAPI) usa o
   schema **`dcan`** (exposto do mesmo jeito) + a Edge Function
   `sync-3s` (`volumes/functions/sync-3s/`, não versionada - ver
-  `.gitignore`) + as variáveis `API3S_USUARIO`/`API3S_SENHA`/
-  `SYNC_SECRET` no `.env` do serviço `functions`. Agendada via `pg_cron`
+  `.gitignore`) + os secrets `API3S_USUARIO`/`API3S_SENHA`/
+  `SYNC_SECRET` na aba Secrets do `/admin`. Agendada via `pg_cron`
   a cada minuto (job `dcan-sync-3s`, segredo guardado no Vault sob o
   nome `sync_3s_secret` - ver bloco de setup mais abaixo). App consumidor
   é um projeto Lovable separado.
@@ -186,16 +192,23 @@ Custa segundos e evita o 502.
   `/CadastroUnificado/ObterTokenIntegracao` exige o próprio `Token` +
   `client_id` e devolve 500 vazio sem eles.
 
-  **Secrets de Edge Functions novos vão na aba Secrets do `/admin`**, não
-  no `.env`: valem na hora, sem editar `docker-compose.yml` nem recriar o
-  container (ver README, aba Secrets). As variáveis antigas da 3S/KMM no
-  `.env` continuam funcionando; se o mesmo nome existir nos dois, vale o
-  do painel.
+  **Todos os secrets das Edge Functions ficam na aba Secrets do
+  `/admin`** - valem na hora, sem editar `docker-compose.yml` nem recriar
+  o container (ver README, aba Secrets). As variáveis da 3S/KMM saíram do
+  `docker-compose.yml`: linhas `API3S_*`/`KMM_*`/`SYNC_SECRET` que ainda
+  estejam no `.env` não fazem mais efeito nenhum.
+
+  **Cuidado ao trocar o `SYNC_SECRET`:** ele existe em dois lugares - na
+  aba Secrets (o que a função `sync-3s` confere) e no Vault do banco
+  (`sync_3s_secret`, o que o cron manda no header). Trocar só um faz o
+  cron levar 401 a cada minuto. Pra trocar, salve o novo valor no painel
+  e rode no SQL Editor:
+  `select vault.update_secret((select id from vault.secrets where name = 'sync_3s_secret'), 'NOVO_VALOR');`
 
   Setup do agendamento (rodar uma vez, já feito neste servidor):
 
   ```bash
-  SYNC_SECRET="$(grep '^SYNC_SECRET=' ~/supabase/.env | cut -d= -f2-)" && \
+  SYNC_SECRET="$(sudo jq -r '.secrets.SYNC_SECRET.value' ~/supabase/volumes/functions-secrets/secrets.json)" && \
   cd ~/supabase && \
   docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -v secret="$SYNC_SECRET" <<'SQL'
   create extension if not exists pg_cron;

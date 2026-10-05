@@ -464,22 +464,10 @@ services:
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       # TODO: Allow configuring VERIFY_JWT per function.
       VERIFY_JWT: "${FUNCTIONS_VERIFY_JWT}"
-
-      # Integração 3S (projeto DCAN, função sync-3s em volumes/functions/) -
-      # credenciais só existem aqui, nunca em código/Git/banco/VITE_*.
-      API3S_USUARIO: ${API3S_USUARIO:-}
-      API3S_SENHA: ${API3S_SENHA:-}
-      SYNC_SECRET: ${SYNC_SECRET:-}
-      API3S_URL: ${API3S_URL:-}
-      API3S_FUSO: ${API3S_FUSO:-}
-      DCAN_SCHEMA: ${DCAN_SCHEMA:-}
-
-      # Integração KMM/MultiTMS (projeto DCAN, função sync-kmm) - mesma regra.
-      KMM_USUARIO: ${KMM_USUARIO:-}
-      KMM_SENHA: ${KMM_SENHA:-}
-      KMM_TOKEN: ${KMM_TOKEN:-}
-      KMM_CLIENT_ID: ${KMM_CLIENT_ID:-}
-      KMM_URL: ${KMM_URL:-}
+      # Secrets próprios das funções (tokens/senhas de APIs externas, ex.:
+      # API3S_*, KMM_*, SYNC_SECRET) NÃO vêm mais daqui: ficam na aba
+      # Secrets do /admin e são entregues pelo dispatcher (main/index.ts) -
+      # ver docs/servidor.md.
     command:
       [
         "start",

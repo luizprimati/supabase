@@ -204,6 +204,15 @@ usuário precisa ser `"admin"`** — é ele quem consegue acessar
   Nomes reservados (`SUPABASE_*`, `DENO_*`, `JWT_SECRET`, `VERIFY_JWT`)
   são recusados, pra ninguém sobrescrever as chaves internas.
 
+  A tela "Edge Function Secrets" do Studio **não** lê o servidor: no
+  self-hosted ela só mostra uma lista fixa dos `SUPABASE_*` padrão, sem
+  valores e sem edição. O `studio-inject.js` põe nela um botão
+  **"Gerenciar secrets no painel admin"**, que abre `/admin?tab=secrets`.
+  Pra trazer secrets que já estavam no `.env` pra cá, use
+  `sudo python3 utils/migrate-function-secrets.py` (copia do container
+  `functions` em execução, sem mostrar os valores, e não sobrescreve o
+  que já estiver no painel).
+
 - **Backup** — backup automático do banco (Postgres, via
   `pg_dump`) e das Edge Functions (`.tar.gz`) pro Google Drive da sua
   própria conta. Veja o passo a passo completo (criar as credenciais no

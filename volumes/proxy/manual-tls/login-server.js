@@ -3129,6 +3129,14 @@ ${THEME_CSS}
         });
     });
 
+    // Atalho vindo do botão injetado na tela de secrets do Studio
+    // (?tab=secrets) - abre direto na aba pedida.
+    var deepLinkTab = new URLSearchParams(window.location.search).get('tab');
+    if (deepLinkTab && Object.prototype.hasOwnProperty.call(tabPanels, deepLinkTab)) {
+      var deepLinkTabBtn = document.querySelector('.tab-btn[data-tab="' + deepLinkTab + '"]');
+      if (deepLinkTabBtn) deepLinkTabBtn.click();
+    }
+
     // Atalho vindo do botão injetado na página da função no Studio
     // (?editFunction=<nome>) - já abre direto na aba certa com o editor.
     var deepLinkFn = new URLSearchParams(window.location.search).get('editFunction');
@@ -3533,28 +3541,44 @@ function studioInjectJs(isAdminUser) {
   // Em vez de tentar contornar cada camada (cada vez mais frágil), este
   // botão só leva direto pro editor de verdade em /admin, que já
   // funciona.
-  function getFunctionNameFromPath() {
+  // "/functions/<x>" do Studio: <x> é o nome da função, exceto rotas
+  // próprias dele - "new" e "secrets" (tela "Edge Function Secrets", que
+  // no self-hosted só lista os SUPABASE_* padrão e não deixa editar).
+  function getFunctionsSubpath() {
     var parts = window.location.pathname.split('/').filter(Boolean);
     var idx = parts.indexOf('functions');
     if (idx === -1) return null;
-    var name = parts[idx + 1];
-    if (!name || name === 'new') return null;
-    return name;
+    return parts[idx + 1] || null;
+  }
+
+  function adminLinkTarget() {
+    var sub = getFunctionsSubpath();
+    if (!sub || sub === 'new') return null;
+    if (sub === 'secrets') return { href: '/admin?tab=secrets', text: 'Gerenciar secrets no painel admin' };
+    return { href: '/admin?editFunction=' + encodeURIComponent(sub), text: 'Editar no painel admin' };
   }
 
   var editLink = null;
   function ensureEditDeepLink() {
-    var name = getFunctionNameFromPath();
-    if (!name) {
+    var target = adminLinkTarget();
+    if (!target) {
       if (editLink) { editLink.remove(); editLink = null; }
       return;
     }
-    if (editLink) return;
+    // A SPA troca de rota sem recarregar - atualiza o mesmo botão em vez
+    // de deixar o destino da tela anterior.
+    if (editLink) {
+      if (editLink.getAttribute('href') !== target.href) {
+        editLink.href = target.href;
+        editLink.textContent = target.text;
+      }
+      return;
+    }
 
     editLink = document.createElement('a');
     editLink.id = '__edit_admin_link';
-    editLink.href = '/admin?editFunction=' + encodeURIComponent(name);
-    editLink.textContent = 'Editar no painel admin';
+    editLink.href = target.href;
+    editLink.textContent = target.text;
     editLink.style.position = 'fixed';
     editLink.style.bottom = '20px';
     editLink.style.right = '20px';
