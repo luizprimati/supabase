@@ -55,14 +55,20 @@ IA (Ollama) na porta **9444** - mesma lógica de isolamento, outro domínio
 - `monitoring` - Dozzle (`/dozzle/`, logs e containers) e Beszel
   (`/beszel/`, saúde do servidor com histórico e alertas), atrás do Nginx
   da 9443 e só para admin. Ver [monitoramento.md](monitoramento.md).
+- `monitoring-agent` - agente do Beszel; só entra depois do passo "Add
+  System" (precisa da chave do hub).
 
 Confira o que está ativo agora com `sh run.sh config`.
 
-**Limite de logs:** todo container dos projetos supabase e chat-IA usa
-`json-file` com no máximo 5 arquivos de 10 MB (bloco `x-logging` em cada
-compose). Serviço novo em qualquer compose deste servidor deve receber
+**Limite de logs:** os compose em uso nos projetos supabase e chat-IA
+definem `json-file` com no máximo 5 arquivos de 10 MB (bloco `x-logging`
+em cada arquivo). Só vale para container criado depois disso: confira com
+o `docker inspect` do fim de [monitoramento.md](monitoramento.md#instalar-uma-vez).
+Serviço novo em qualquer compose deste servidor deve receber
 `logging: *default-logging` - sem isso o log cresce sem limite até o
-container ser recriado. O limite global do Docker (`/etc/docker/daemon.json`)
+container ser recriado. Dos overrides opcionais do supabase, só o `logs`
+já tem o bloco; `s3`, `rustfs`, `pgbouncer`, `caddy` e `nginx` precisam
+recebê-lo antes de serem ligados. O limite global do Docker (`/etc/docker/daemon.json`)
 não foi usado de propósito: mudá-lo exige reiniciar o Docker, o que derruba
 a rádio. A rádio já vem com o próprio limite (1 MB x 5).
 

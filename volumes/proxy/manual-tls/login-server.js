@@ -832,9 +832,22 @@ function makeToken(username) {
   return Buffer.from(`${payload}.${sign(payload)}`).toString('base64url');
 }
 
+// Uma linha por tentativa de login no log deste container (aparece no
+// Dozzle). É a trilha de quem entrou e de onde: o log do Nginx não guarda
+// o usuário e gira rápido com requisições anônimas grandes. X-Real-IP vem
+// do Nginx ($remote_addr), que sobrescreve o que o cliente mandar.
+function logLoginAttempt(ok, username, user, req) {
+  const clean = (s) => String(s).replace(/[\x00-\x1F\x7F]/g, '?').slice(0, 64);
+  const ip = clean(req.headers['x-real-ip'] || req.socket.remoteAddress || '');
+  const role = ok ? (isAdmin(user) ? ' admin' : ' user') : '';
+  console.log(`${new Date().toISOString()} ${ok ? 'login-ok' : 'login-falhou'}${role} usuario=${JSON.stringify(clean(username))} ip=${ip}`);
+}
+
 // Retorna o username validado do cookie, ou null. Reconfirma que o
 // usuário ainda existe no arquivo - permite revogar acesso na hora só
-// removendo a entrada, sem esperar o cookie expirar.
+// removendo a entrada, sem esperar o cookie expirar. Vale para cada
+// requisição nova: um stream já aberto do Dozzle/Beszel continua até cair
+// (ver "Tirar o acesso de alguém" em docs/monitoramento.md).
 function usernameFromToken(token) {
   try {
     const parts = Buffer.from(token, 'base64url').toString('utf8').split('.');
@@ -3759,6 +3772,7 @@ function handleRequest(req, res) {
       const redirect = String(form.rd || '/');
       const user = findUser(loadUsers(), username);
       const ok = Boolean(user) && verifyPassword(password, user.salt, user.hash);
+      logLoginAttempt(ok, username, user, req);
       if (ok) {
         // Sem um destino específico (rd só veio "/" ou "/login"): usuário
         // comum vai direto pro Supabase; admin cai de volta em /login,

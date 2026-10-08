@@ -438,9 +438,12 @@ alertas). Os dois ficam atrás do Nginx da 9443, só para admin, sem nenhuma
 porta nova. Instalação, passo único do Beszel, alertas e atualização:
 [docs/monitoramento.md](docs/monitoramento.md).
 
-Todos os containers deste projeto têm limite de log (5 arquivos de 10 MB,
-bloco `x-logging` nos compose). Serviço novo deve receber
-`logging: *default-logging`.
+Os containers dos compose em uso neste servidor (`docker-compose.yml`,
+`manual-tls`, `monitoring`, `monitoring-agent` e `logs`) têm limite de log
+(5 arquivos de 10 MB, bloco `x-logging`). Serviço novo deve receber
+`logging: *default-logging`. Os outros overrides opcionais que criam
+serviços (`s3`, `rustfs`, `pgbouncer`, `caddy`, `nginx`) não têm: antes de
+ligar um deles, copie o bloco `x-logging` para o arquivo.
 
 ## Referência
 

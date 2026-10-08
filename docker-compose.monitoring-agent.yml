@@ -1,0 +1,43 @@
+# Override opcional: agente do Beszel, que mede o servidor (CPU, memória,
+# disco, rede, carga) e os containers para o hub do
+# docker-compose.monitoring.yml. Fica num arquivo à parte porque só pode
+# subir depois que a chave pública do hub existe (passo "Add System" do
+# Beszel) - assim nenhum "sh run.sh start" o cria antes da hora.
+#
+# Uso (depois do docker-compose.monitoring.yml, ver docs/monitoramento.md):
+#   BESZEL_AGENT_KEY='ssh-ed25519 ...' no .env
+#   sh run.sh config add monitoring-agent && sh run.sh start
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  beszel-agent:
+    container_name: supabase-beszel-agent
+    image: henrygd/beszel-agent:0.21.0
+    restart: unless-stopped
+    logging: *default-logging
+    # Rede do host: só assim ele mede o tráfego real da placa de rede do
+    # servidor (CPU, memória e disco já viriam do /proc e do disco raiz).
+    # Nenhuma porta é aberta: ele escuta só no socket abaixo.
+    network_mode: host
+    volumes:
+      - ${DOCKER_SOCKET_LOCATION:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      # Socket por onde o hub fala com o agente (SSH sobre socket de
+      # arquivo), compartilhado com o serviço beszel.
+      - beszel-socket:/beszel_socket
+      - beszel-agent-data:/var/lib/beszel-agent
+    environment:
+      LISTEN: /beszel_socket/beszel.sock
+      # Chave pública do hub, copiada do Beszel ao "Adicionar sistema".
+      KEY: ${BESZEL_AGENT_KEY:?Defina BESZEL_AGENT_KEY no .env (chave da tela Add System do Beszel) - veja docs/monitoramento.md}
+    # Sem healthcheck: o "/agent health" da 0.21.0 sempre responde ok (o
+    # próprio comando renova o arquivo que ele confere), então não detecta
+    # agente desconectado. Quem avisa isso é o alerta "Status" do Beszel.
+
+volumes:
+  beszel-socket:
+  beszel-agent-data:

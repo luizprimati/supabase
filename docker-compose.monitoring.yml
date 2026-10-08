@@ -7,15 +7,18 @@
 #                                        memória, disco, rede e carga reais),
 #                                        com histórico e alertas
 #
-# Nada é publicado no host: os dois ficam numa rede só deles com o Nginx
-# ("monitoring"), e quem entra é decidido pelo login-server (rota
-# /auth-admin) - o Nginx repassa o usuário num header que estes apps
-# aceitam no lugar de login próprio. Veja docs/monitoramento.md.
+# Nada é publicado no host: cada app fica numa rede só dele com o Nginx, e
+# quem entra é decidido pelo login-server (rota /auth-admin) - o Nginx
+# repassa o usuário num header que estes apps aceitam no lugar de login
+# próprio, e sempre sobrescreve o que vier do navegador. A rede própria
+# impede que OUTROS CONTAINERS falem com eles; processos na rede do próprio
+# host (root/ubuntu e o beszel-agent) alcançam o IP deles, como já
+# alcançam o Studio e o pg-meta.
 #
-# Uso:
-#   sh run.sh config add monitoring
-#   sh run.sh start
-#   sh run.sh restart nginx
+# Uso: siga "Instalar (uma vez)" em docs/monitoramento.md. Além de
+# "sh run.sh config add monitoring", ele gera a BESZEL_USER_PASSWORD, troca
+# a senha do superusuário do Beszel por uma aleatória e, depois do "Add
+# System" na tela, liga o agente (docker-compose.monitoring-agent.yml).
 
 x-logging: &default-logging
   driver: json-file
@@ -45,7 +48,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     # Rede só dele com o Nginx: nenhum outro container fala com o Dozzle
-    # direto (ele confia no header Remote-User, que só o Nginx define).
+    # direto (ele confia no header Remote-User, que pelo Nginx é sempre
+    # sobrescrito).
     networks:
       - monitoring-dozzle
     volumes:
@@ -92,10 +96,12 @@ services:
       # tira o prefixo antes de repassar) e é o link usado nos alertas.
       APP_URL: https://${PROXY_DOMAIN}:${SUPABASE_PROXY_PORT:-9443}/beszel
       # Criados só na PRIMEIRA subida (banco vazio): o usuário que o Nginx
-      # loga via TRUSTED_AUTH_HEADER e o superusuário do PocketBase. Assim
-      # nunca existe a tela de "primeiro acesso cria a conta". A senha não
-      # é usada para entrar (login por senha desligado abaixo), mas precisa
-      # ser forte - gere com: openssl rand -hex 24
+      # loga via TRUSTED_AUTH_HEADER e o superusuário do PocketBase, os dois
+      # com esta senha. Assim nunca existe a tela de "primeiro acesso cria
+      # a conta". O usuário não entra por senha (desligado abaixo); a do
+      # superusuário é trocada por uma aleatória logo na instalação (ver
+      # docs/monitoramento.md). Mesmo assim a linha precisa continuar no
+      # .env, senão o docker compose recusa este arquivo.
       USER_EMAIL: monitor@beszel.local
       USER_PASSWORD: ${BESZEL_USER_PASSWORD:?Defina BESZEL_USER_PASSWORD no .env - veja docs/monitoramento.md}
       # O Nginx manda sempre este header com o e-mail acima, para qualquer
@@ -110,37 +116,11 @@ services:
       start_period: 10s
       start_interval: 2s
 
-  beszel-agent:
-    container_name: supabase-beszel-agent
-    image: henrygd/beszel-agent:0.21.0
-    restart: unless-stopped
-    logging: *default-logging
-    # Rede do host: só assim ele mede o tráfego real da placa de rede do
-    # servidor (CPU, memória e disco já viriam do /proc e do disco raiz).
-    network_mode: host
-    volumes:
-      - ${DOCKER_SOCKET_LOCATION:-/var/run/docker.sock}:/var/run/docker.sock:ro
-      - beszel-socket:/beszel_socket
-      - beszel-agent-data:/var/lib/beszel-agent
-    environment:
-      LISTEN: /beszel_socket/beszel.sock
-      # Chave pública do hub - copiada do Beszel ao "Adicionar sistema"
-      # (passo único, ver docs/monitoramento.md). Sem ela o agente não
-      # sobe; por isso ele só é iniciado depois desse passo.
-      KEY: ${BESZEL_AGENT_KEY:-}
-    healthcheck:
-      test: ["CMD", "/agent", "health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-      start_interval: 2s
-
 volumes:
   dozzle-data:
   beszel-data:
+  # Compartilhado com o beszel-agent (docker-compose.monitoring-agent.yml).
   beszel-socket:
-  beszel-agent-data:
 
 networks:
   monitoring-dozzle:

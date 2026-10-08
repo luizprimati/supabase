@@ -9,6 +9,29 @@ upstream api_gw_upstream {
     keepalive 2;
 }
 
+# Tudo na 9443 é uma origem só: o Studio, o /admin, o Dozzle, o Beszel e o
+# conteúdo que vem do gateway (Storage, REST, Functions...). Um SVG com
+# <script> num bucket público (ou HTML vindo de uma RPC ou função), aberto
+# por um admin, rodaria com a sessão dele e chegaria ao /admin e aos logs.
+# Por isso, quando a resposta do gateway é algo que o navegador renderiza
+# como página (HTML, SVG, XML), ela vai com "CSP: sandbox": roda numa
+# origem opaca, sem cookie e sem script. JSON, imagens, PDF, vídeo e
+# downloads não mudam.
+map $upstream_http_content_type $api_gw_csp {
+    default "";
+    "~*(html|xml|svg|xsl)" "sandbox";
+}
+
+# Escrita (POST, PUT, DELETE...) vinda de OUTRO site do mesmo domínio
+# (outra porta ou subdomínio de primati.com.br), que leva o cookie
+# SameSite=Lax junto. As telas do /admin e do monitoramento sempre mandam
+# "same-origin"; curl e navegadores antigos não mandam nada e passam.
+map "$request_method:$http_sec_fetch_site" $cross_site_write {
+    default 0;
+    "~^(GET|HEAD|OPTIONS):" 0;
+    "~:(same-site|cross-site)$" 1;
+}
+
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -76,6 +99,7 @@ server {
     # CRUD de usuários (só para quem é "admin" - o próprio login-server.js
     # faz essa checagem e devolve 302/403 quando não pode).
     location /admin {
+        if ($cross_site_write) { return 403; }
         proxy_pass http://login:8085;
     }
 
@@ -128,6 +152,7 @@ server {
     }
 
     location ^~ /dozzle/ {
+        if ($cross_site_write) { return 403; }
         auth_request /internal-auth-admin;
         auth_request_set $auth_user $upstream_http_x_auth_user;
         error_page 401 = @login_redirect;
@@ -156,6 +181,13 @@ server {
         proxy_set_header Remote-Filter "";
         proxy_set_header Remote-Roles "download,notifications";
 
+        # O cookie da sessão do painel (que abre o /admin) não serve para o
+        # app: não sai do Nginx, e o app não grava cookie no domínio. Não
+        # isola um app comprometido (mesma origem do /admin), só evita que
+        # a sessão apareça em log ou memória dele.
+        proxy_set_header Cookie "";
+        proxy_hide_header Set-Cookie;
+
         # Logs e estatísticas chegam por Server-Sent Events.
         proxy_set_header Connection "";
         proxy_buffering off;
@@ -177,6 +209,15 @@ server {
     }
 
     location ^~ /beszel/ {
+        # API de superusuário do PocketBase (login por senha, settings,
+        # backups). Não é usada pela tela; a senha do superusuário é trocada
+        # por uma aleatória na instalação, e isto fecha a porta de vez. Pega
+        # também o id fixo da coleção e qualquer combinação de maiúsculas.
+        location ~* ^/beszel/api/collections/(_superusers|pbc_3142635823)(/|$) {
+            return 404;
+        }
+
+        if ($cross_site_write) { return 403; }
         auth_request /internal-auth-admin;
         error_page 401 = @login_redirect;
 
@@ -199,6 +240,10 @@ server {
         # Sempre definido aqui - o que vier do navegador é descartado.
         proxy_set_header X-Beszel-User "monitor@beszel.local";
 
+        # Mesmo motivo do /dozzle/ (o Beszel usa o header Authorization).
+        proxy_set_header Cookie "";
+        proxy_hide_header Set-Cookie;
+
         # Atualização ao vivo do painel (Server-Sent Events do PocketBase).
         proxy_set_header Connection "";
         proxy_buffering off;
@@ -206,16 +251,25 @@ server {
         proxy_read_timeout 3600s;
     }
 
+    # Gateway do Supabase. add_header: ver o map $api_gw_csp no topo (o que
+    # o navegador renderizaria como página roda isolado) e nosniff (o
+    # navegador não "adivinha" HTML num arquivo de outro tipo).
     location /auth {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location /rest {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location /graphql {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location /realtime/v1/ {
@@ -227,6 +281,8 @@ server {
 
     location /storage/v1/ {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
         proxy_buffering off;
         proxy_request_buffering off;
         chunked_transfer_encoding off;
@@ -235,17 +291,25 @@ server {
 
     location /functions {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location /mcp {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location /sso {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     location = /.well-known/oauth-authorization-server {
         proxy_pass http://api_gw_upstream;
+        add_header Content-Security-Policy $api_gw_csp always;
+        add_header X-Content-Type-Options nosniff always;
     }
 }

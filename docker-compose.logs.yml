@@ -5,6 +5,15 @@
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.logs.yml up -d
 
+# Limite dos logs de cada container (json-file), igual ao do
+# docker-compose.yml - âncora YAML não atravessa arquivos, por isso o bloco
+# se repete aqui. O Logflare gera muito log.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   studio:
@@ -20,6 +29,7 @@ services:
     container_name: supabase-analytics
     image: supabase/logflare:1.50.10
     restart: unless-stopped
+    logging: *default-logging
     #ports:
     #  - 4000:4000
     healthcheck:
@@ -73,6 +83,7 @@ services:
     container_name: supabase-vector
     image: timberio/vector:0.53.0-alpine
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./volumes/logs/vector.yml:/etc/vector/vector.yml:ro,z
       - ${DOCKER_SOCKET_LOCATION}:/var/run/docker.sock:ro,z
