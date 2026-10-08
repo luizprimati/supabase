@@ -47,6 +47,17 @@ server {
         proxy_set_header Content-Length "";
     }
 
+    # Igual ao de cima, mas só aprova admin (403 para usuário comum) e
+    # devolve o usuário no header X-Auth-User - usado pelas ferramentas de
+    # monitoramento (/dozzle/, /beszel/), que veem logs/métricas de TODOS os
+    # containers do servidor (rádio e chat-IA inclusive).
+    location = /internal-auth-admin {
+        internal;
+        proxy_pass http://login:8085/auth-admin;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+    }
+
     location /login {
         proxy_pass http://login:8085;
     }
@@ -102,6 +113,97 @@ server {
         # que nunca inclui porta, e isso mandaria o navegador para a 443
         # (do AzuraCast) em vez da 9443.
         return 302 $scheme://$http_host/login?rd=$request_uri;
+    }
+
+    # --- Monitoramento (override docker-compose.monitoring.yml) ---
+    # Os apps ficam numa rede só deles com este Nginx e são resolvidos na
+    # hora de cada requisição (resolver do Docker + variável): se estiverem
+    # fora do ar (ou o override nem estiver ativo), só /dozzle/ e /beszel/
+    # dão 502 - o resto da 9443 sobe normalmente. Também evita o 502 por IP
+    # velho depois de recriar o container (ver docs/servidor.md).
+
+    # Dozzle: logs ao vivo e estatísticas dos containers.
+    location = /dozzle {
+        return 301 $scheme://$http_host/dozzle/;
+    }
+
+    location ^~ /dozzle/ {
+        auth_request /internal-auth-admin;
+        auth_request_set $auth_user $upstream_http_x_auth_user;
+        error_page 401 = @login_redirect;
+
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $dozzle_upstream http://dozzle:8080;
+        proxy_pass $dozzle_upstream;
+
+        # Declarar proxy_set_header aqui faz o bloco não herdar os do server
+        # - por isso os X-Forwarded-* se repetem.
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        # DOZZLE_AUTH_PROVIDER=forward-proxy: o Dozzle confia cegamente nestes
+        # headers, então todos são SEMPRE definidos aqui (valor "" = não
+        # repassa, descartando o que vier do navegador). Remote-Roles fixo e
+        # sem "all": ninguém reconfigura o Dozzle, liga o Dozzle Cloud nem
+        # ações/terminal pela tela. Sem Remote-User o Dozzle responde 401.
+        proxy_set_header Remote-User $auth_user;
+        proxy_set_header Remote-Name $auth_user;
+        proxy_set_header Remote-Email "";
+        proxy_set_header Remote-Filter "";
+        proxy_set_header Remote-Roles "download,notifications";
+
+        # Logs e estatísticas chegam por Server-Sent Events.
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 3600s;
+    }
+
+    # Beszel: saúde do servidor (CPU, memória, disco, rede, carga) com
+    # histórico e alertas.
+    location = /beszel {
+        return 301 $scheme://$http_host/beszel/;
+    }
+
+    # Painel de superusuário do PocketBase (banco interno do Beszel) - não é
+    # usado aqui; fechado para não ter uma tela de login por senha a mais.
+    location ^~ /beszel/_/ {
+        return 404;
+    }
+
+    location ^~ /beszel/ {
+        auth_request /internal-auth-admin;
+        error_page 401 = @login_redirect;
+
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $beszel_upstream http://beszel:8090;
+        # Ao contrário do Dozzle, o Beszel responde na raiz: o painel pede
+        # /beszel/api/... (APP_URL) e o hub espera /api/... .
+        rewrite ^/beszel/(.*)$ /$1 break;
+        proxy_pass $beszel_upstream;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        # TRUSTED_AUTH_HEADER do Beszel: loga como o usuário com este e-mail
+        # (criado na primeira subida, ver docker-compose.monitoring.yml).
+        # Sempre definido aqui - o que vier do navegador é descartado.
+        proxy_set_header X-Beszel-User "monitor@beszel.local";
+
+        # Atualização ao vivo do painel (Server-Sent Events do PocketBase).
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
     }
 
     location /auth {

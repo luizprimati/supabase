@@ -19,6 +19,14 @@
 #   sh run.sh config add manual-tls
 #   sh run.sh start
 
+# Mesmo limite de logs do docker-compose.yml (âncoras YAML não atravessam
+# arquivos, por isso o bloco se repete aqui).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   # Gateway e Studio deixam de ser publicados no host: só são alcançados
   # pela rede interna do compose, através do container "nginx" abaixo.
@@ -39,6 +47,7 @@ services:
     container_name: supabase-studio-login
     image: node:20-alpine
     restart: unless-stopped
+    logging: *default-logging
     # `pg_dump` (backup do Postgres) e `tar` (backup das Edge Functions)
     # não vêm na imagem node:20-alpine - instala na subida do container
     # em vez de criar uma imagem própria/Dockerfile só pra isso (mantém o
@@ -118,6 +127,7 @@ services:
     container_name: supabase-nginx-manual
     image: nginx:1.27-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "${SUPABASE_PROXY_PORT:-9443}:443"
     depends_on:

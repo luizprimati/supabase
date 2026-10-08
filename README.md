@@ -429,6 +429,19 @@ sh update.sh                  # atualizar para uma versão mais nova do Supabase
 `update.sh` faz merge de 3 vias contra o snapshot original (`.supabase-version`)
 — revise o diff antes de aplicar em produção.
 
+### Monitoramento pelo navegador (opcional)
+
+O override `docker-compose.monitoring.yml` adiciona o **Dozzle**
+(`/dozzle/`, logs ao vivo e estatísticas de cada container) e o **Beszel**
+(`/beszel/`, CPU, memória, disco e rede do servidor, com histórico e
+alertas). Os dois ficam atrás do Nginx da 9443, só para admin, sem nenhuma
+porta nova. Instalação, passo único do Beszel, alertas e atualização:
+[docs/monitoramento.md](docs/monitoramento.md).
+
+Todos os containers deste projeto têm limite de log (5 arquivos de 10 MB,
+bloco `x-logging` nos compose). Serviço novo deve receber
+`logging: *default-logging`.
+
 ## Referência
 
 - Guia oficial: <https://supabase.com/docs/guides/self-hosting/docker>

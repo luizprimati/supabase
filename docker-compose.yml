@@ -10,12 +10,22 @@
 
 name: supabase
 
+# Limite dos logs de cada container (json-file, padrão do daemon): no
+# máximo 5 arquivos de 10 MB. Sem isso os logs crescem até recriar o
+# container. É também o histórico que o Dozzle (/dozzle/) consegue mostrar.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
 
   studio:
     container_name: supabase-studio
     image: supabase/studio:2026.09.07-sha-7996410
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test:
         [
@@ -71,6 +81,7 @@ services:
     container_name: supabase-envoy
     image: envoyproxy/envoy:v1.39.1
     restart: unless-stopped
+    logging: *default-logging
     networks:
       default:
         # Expose `envoy` and `kong` as network aliases, so internal configs
@@ -110,6 +121,7 @@ services:
     container_name: supabase-auth
     image: supabase/gotrue:v2.196.0
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test:
         [
@@ -250,6 +262,7 @@ services:
     container_name: supabase-rest
     image: postgrest/postgrest:v14.17
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -286,6 +299,7 @@ services:
     container_name: realtime-dev.supabase-realtime
     image: supabase/realtime:v2.134.10
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -332,6 +346,7 @@ services:
     container_name: supabase-storage
     image: supabase/storage-api:v1.74.0
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -395,6 +410,7 @@ services:
     container_name: supabase-imgproxy
     image: darthsim/imgproxy:v3.31.4
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./volumes/storage:/var/lib/storage:z
     healthcheck:
@@ -418,6 +434,7 @@ services:
     container_name: supabase-meta
     image: supabase/postgres-meta:v0.99.0
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -435,6 +452,7 @@ services:
     container_name: supabase-edge-functions
     image: supabase/edge-runtime:v1.76.2
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./volumes/functions:/home/deno/functions:z
       - deno-cache:/root/.cache/deno
@@ -481,6 +499,7 @@ services:
     # To upgrade an existing Postgres 15 database in place, see utils/upgrade-pg17.sh.
     image: supabase/postgres:17.6.1.136
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
       # Must be superuser to create event trigger
@@ -535,6 +554,7 @@ services:
     container_name: supabase-pooler
     image: supabase/supavisor:2.9.12
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - ${POSTGRES_PORT}:5432
       - ${POOLER_PROXY_PORT_TRANSACTION}:6543

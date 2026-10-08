@@ -50,6 +50,10 @@ const PG_ENV = {
 // projeto montada no mesmo caminho do host) - veja docs/schemas-panel.md.
 // Sem HOST_PROJECT_DIR, a aba lista os schemas mas não publica sozinha.
 const HOST_PROJECT_DIR = process.env.HOST_PROJECT_DIR || '';
+
+// Definida pelo override docker-compose.monitoring.yml: mostra os atalhos
+// para /beszel/ e /dozzle/ só quando eles existem de fato.
+const MONITORING_ENABLED = process.env.MONITORING_ENABLED === 'true';
 const ENV_FILE = HOST_PROJECT_DIR ? path.join(HOST_PROJECT_DIR, '.env') : '';
 
 // Schemas internos do próprio Supabase - nunca oferecidos para expor
@@ -1162,7 +1166,9 @@ ${themeInitScript()}
       <div class="hero-actions">
         ${loggedIn
           ? `<a class="btn-primary" href="/admin">Painel Admin</a>
-             <a class="btn-secondary" href="/">Ir para o Supabase</a>`
+             <a class="btn-secondary" href="/">Ir para o Supabase</a>${MONITORING_ENABLED ? `
+             <a class="btn-secondary" href="/beszel/">Saúde do servidor</a>
+             <a class="btn-secondary" href="/dozzle/">Logs dos containers</a>` : ''}`
           : `<button class="btn-primary" id="ctaBtn" type="button">Acessar o painel</button>`}
       </div>
     </div>
@@ -1850,7 +1856,9 @@ ${THEME_CSS}
     </div>
     <div class="nav-actions">
       ${themeToggleMarkup()}
-      <a class="btn btn-outline" href="/">Ir para Supabase</a>
+      <a class="btn btn-outline" href="/">Ir para Supabase</a>${MONITORING_ENABLED ? `
+      <a class="btn btn-outline" href="/beszel/">Servidor</a>
+      <a class="btn btn-outline" href="/dozzle/">Logs</a>` : ''}
       <a class="btn btn-outline" href="/login">Voltar</a>
       <a class="btn btn-outline" href="/logout">Sair</a>
     </div>
@@ -3691,6 +3699,20 @@ function handleRequest(req, res) {
   if (url.pathname === '/auth') {
     const cookies = parseCookies(req.headers.cookie);
     res.writeHead(usernameFromToken(cookies[COOKIE_NAME]) ? 200 : 401);
+    res.end();
+    return;
+  }
+
+  // Variante do /auth para as ferramentas de monitoramento (Dozzle, Beszel):
+  // só admin passa (logs de todos os containers podem conter segredos), e o
+  // usuário volta no header X-Auth-User para o Nginx repassar ao app.
+  if (url.pathname === '/auth-admin') {
+    const user = getSessionUser(req);
+    if (!user) { res.writeHead(401); res.end(); return; }
+    if (!isAdmin(user)) { res.writeHead(403); res.end(); return; }
+    // Header HTTP só aceita ASCII visível - nome com acento vai codificado.
+    const headerUser = /^[\x21-\x7E]+$/.test(user.username) ? user.username : encodeURIComponent(user.username);
+    res.writeHead(200, { 'X-Auth-User': headerUser });
     res.end();
     return;
   }

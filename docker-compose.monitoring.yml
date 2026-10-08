@@ -1,0 +1,147 @@
+# Override opcional: monitoramento do servidor pelo navegador, atrás do
+# Nginx do override manual-tls (requer ele ativo) e só para admin:
+#
+#   https://SEU_DOMINIO:9443/dozzle/  - Dozzle: logs ao vivo e CPU/memória/
+#                                        rede/disco de cada container
+#   https://SEU_DOMINIO:9443/beszel/  - Beszel: saúde do servidor (CPU,
+#                                        memória, disco, rede e carga reais),
+#                                        com histórico e alertas
+#
+# Nada é publicado no host: os dois ficam numa rede só deles com o Nginx
+# ("monitoring"), e quem entra é decidido pelo login-server (rota
+# /auth-admin) - o Nginx repassa o usuário num header que estes apps
+# aceitam no lugar de login próprio. Veja docs/monitoramento.md.
+#
+# Uso:
+#   sh run.sh config add monitoring
+#   sh run.sh start
+#   sh run.sh restart nginx
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  nginx:
+    networks:
+      - default
+      - monitoring-dozzle
+      - monitoring-beszel
+
+  # Só para o painel mostrar os atalhos "Saúde do servidor" e "Logs dos
+  # containers" (e as rotas /auth-admin que o Nginx usa já existem sempre).
+  login:
+    environment:
+      MONITORING_ENABLED: "true"
+
+  dozzle:
+    container_name: supabase-dozzle
+    # Versão fixa: o Dozzle teve vários alertas de segurança em 2026, todos
+    # corrigidos até a v11.3.0. Atualize de propósito (troque a tag), nunca
+    # no automático.
+    image: amir20/dozzle:v11.3.0
+    restart: unless-stopped
+    logging: *default-logging
+    # Rede só dele com o Nginx: nenhum outro container fala com o Dozzle
+    # direto (ele confia no header Remote-User, que só o Nginx define).
+    networks:
+      - monitoring-dozzle
+    volumes:
+      # Necessário para ler logs/estatísticas. Atenção: ":ro" não limita a
+      # API do Docker - quem controla o Dozzle controla o Docker. Por isso
+      # ações e terminal ficam desligados abaixo e o acesso é só de admin.
+      - ${DOCKER_SOCKET_LOCATION:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      # Só para mostrar load e uptime do servidor no card do host.
+      - /proc:/host/proc:ro
+      - dozzle-data:/data
+    environment:
+      DOZZLE_BASE: /dozzle
+      # Confia no usuário que o Nginx repassa (Remote-User) - o Nginx fixa
+      # também o Remote-Roles, sem "all". Ver nginx.conf.tpl (/dozzle/).
+      DOZZLE_AUTH_PROVIDER: forward-proxy
+      DOZZLE_ENABLE_ACTIONS: "false"
+      DOZZLE_ENABLE_SHELL: "false"
+      DOZZLE_NO_ANALYTICS: "true"
+      # Sem isto o Dozzle busca o avatar do usuário em gravatar.com e
+      # ui-avatars.com (manda o nome do admin para fora).
+      DOZZLE_DISABLE_AVATARS: "true"
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+  beszel:
+    container_name: supabase-beszel
+    image: henrygd/beszel:0.21.0
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - monitoring-beszel
+    volumes:
+      - beszel-data:/beszel_data
+      # Socket por onde o hub fala com o agente (SSH sobre socket de
+      # arquivo) - sem porta nenhuma, nem no host nem na rede.
+      - beszel-socket:/beszel_socket
+    environment:
+      # Endereço público: o painel passa a pedir tudo em /beszel/ (o Nginx
+      # tira o prefixo antes de repassar) e é o link usado nos alertas.
+      APP_URL: https://${PROXY_DOMAIN}:${SUPABASE_PROXY_PORT:-9443}/beszel
+      # Criados só na PRIMEIRA subida (banco vazio): o usuário que o Nginx
+      # loga via TRUSTED_AUTH_HEADER e o superusuário do PocketBase. Assim
+      # nunca existe a tela de "primeiro acesso cria a conta". A senha não
+      # é usada para entrar (login por senha desligado abaixo), mas precisa
+      # ser forte - gere com: openssl rand -hex 24
+      USER_EMAIL: monitor@beszel.local
+      USER_PASSWORD: ${BESZEL_USER_PASSWORD:?Defina BESZEL_USER_PASSWORD no .env - veja docs/monitoramento.md}
+      # O Nginx manda sempre este header com o e-mail acima, para qualquer
+      # admin que passou pelo /auth-admin (ver nginx.conf.tpl, /beszel/).
+      TRUSTED_AUTH_HEADER: X-Beszel-User
+      DISABLE_PASSWORD_AUTH: "true"
+    healthcheck:
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+  beszel-agent:
+    container_name: supabase-beszel-agent
+    image: henrygd/beszel-agent:0.21.0
+    restart: unless-stopped
+    logging: *default-logging
+    # Rede do host: só assim ele mede o tráfego real da placa de rede do
+    # servidor (CPU, memória e disco já viriam do /proc e do disco raiz).
+    network_mode: host
+    volumes:
+      - ${DOCKER_SOCKET_LOCATION:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      - beszel-socket:/beszel_socket
+      - beszel-agent-data:/var/lib/beszel-agent
+    environment:
+      LISTEN: /beszel_socket/beszel.sock
+      # Chave pública do hub - copiada do Beszel ao "Adicionar sistema"
+      # (passo único, ver docs/monitoramento.md). Sem ela o agente não
+      # sobe; por isso ele só é iniciado depois desse passo.
+      KEY: ${BESZEL_AGENT_KEY:-}
+    healthcheck:
+      test: ["CMD", "/agent", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+volumes:
+  dozzle-data:
+  beszel-data:
+  beszel-socket:
+  beszel-agent-data:
+
+networks:
+  monitoring-dozzle:
+  monitoring-beszel:

@@ -52,8 +52,19 @@ IA (Ollama) na porta **9444** - mesma lógica de isolamento, outro domínio
   Docker pra publicar schemas via PostgREST sem terminal. Ver
   [schemas-panel.md](schemas-panel.md) antes de habilitar (é uma escolha
   de risco, feita conscientemente).
+- `monitoring` - Dozzle (`/dozzle/`, logs e containers) e Beszel
+  (`/beszel/`, saúde do servidor com histórico e alertas), atrás do Nginx
+  da 9443 e só para admin. Ver [monitoramento.md](monitoramento.md).
 
 Confira o que está ativo agora com `sh run.sh config`.
+
+**Limite de logs:** todo container dos projetos supabase e chat-IA usa
+`json-file` com no máximo 5 arquivos de 10 MB (bloco `x-logging` em cada
+compose). Serviço novo em qualquer compose deste servidor deve receber
+`logging: *default-logging` - sem isso o log cresce sem limite até o
+container ser recriado. O limite global do Docker (`/etc/docker/daemon.json`)
+não foi usado de propósito: mudá-lo exige reiniciar o Docker, o que derruba
+a rádio. A rádio já vem com o próprio limite (1 MB x 5).
 
 ## Pegadinha de rede já encontrada: NSG "existe" mas não vale nada
 
@@ -235,5 +246,7 @@ Custa segundos e evita o 502.
   (Postgres + Edge Functions) pro Google Drive.
 - [schemas-panel.md](schemas-panel.md) - expor schemas via PostgREST
   pelo painel `/admin`.
+- [monitoramento.md](monitoramento.md) - Dozzle e Beszel: logs, saúde
+  do servidor, alertas.
 - [chat-IA](https://github.com/luizprimati/chat-IA) - repositório
   separado, API de IA (Ollama) rodando no mesmo servidor, porta 9444.

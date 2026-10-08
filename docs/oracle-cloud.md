@@ -5,9 +5,10 @@ decisões abaixo são específicos deste servidor — não genéricos.
 
 ## O que já roda aqui
 
-- **Shape:** `VM.Standard.A1.Flex` (ARM Ampere, região `sa-vinhedo-1`), 2
-  OCPUs, 12 GB RAM. ~10 GB de RAM disponível, 150 GB de disco livre, carga
-  quase zero. **Sobra confortável para o Supabase self-hosted.**
+- **Shape:** `VM.Standard.A1.Flex` (ARM Ampere, região `sa-vinhedo-1`),
+  **4 OCPUs, 24 GB RAM** (redimensionada de 2/12 para rodar também a API de
+  IA do repositório chat-IA). Em 2026-10-08: 19 GB de RAM disponível,
+  disco `/dev/sda1` de 193 GB com 120 GB livres, sem swap.
 - **Docker** 29.1.3 + Compose v5.3.1 já instalados.
 - **A rádio é o AzuraCast** (`ghcr.io/azuracast/azuracast:stable`), rodando
   há 2 meses, e ele é dono de:
