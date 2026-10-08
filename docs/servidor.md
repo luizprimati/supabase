@@ -41,6 +41,16 @@ Também roda neste mesmo servidor, em repositório separado
 IA (Ollama) na porta **9444** - mesma lógica de isolamento, outro domínio
 (`ia.primati.com.br`), sem tocar em nada do Supabase/rádio.
 
+O chat-IA é **privado** (este repositório é público). O clone em
+`~/chat-IA` puxa por SSH com uma *deploy key* só de leitura, cadastrada
+em chat-IA → Settings → Deploy keys ("servidor oracle (só leitura)"):
+chave em `~/.ssh/chatia_deploy`, ligada só àquele clone via
+`git config core.sshCommand` (remote `git@github.com:luizprimati/chat-IA.git`).
+Basta `cd ~/chat-IA && git pull --ff-only` - não pede senha. Se um dia
+der `Permission denied (publickey)`, confira se a chave continua
+cadastrada (a impressão digital sai com
+`ssh-keygen -lf ~/.ssh/chatia_deploy.pub`).
+
 ## Configuração ativa (overrides do `run.sh config`)
 
 - `manual-tls` - Nginx próprio na 9443 + container `login` (tela de
