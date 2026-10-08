@@ -1180,8 +1180,8 @@ ${themeInitScript()}
         ${loggedIn
           ? `<a class="btn-primary" href="/admin">Painel Admin</a>
              <a class="btn-secondary" href="/">Ir para o Supabase</a>${MONITORING_ENABLED ? `
-             <a class="btn-secondary" href="/beszel/">Saúde do servidor</a>
-             <a class="btn-secondary" href="/dozzle/">Logs dos containers</a>` : ''}`
+             <a class="btn-secondary" href="/beszel/" target="_blank" rel="noopener" title="Saúde do servidor (abre em nova aba)">Beszel</a>
+             <a class="btn-secondary" href="/dozzle/" target="_blank" rel="noopener" title="Logs dos containers (abre em nova aba)">Dozzle</a>` : ''}`
           : `<button class="btn-primary" id="ctaBtn" type="button">Acessar o painel</button>`}
       </div>
     </div>
@@ -1870,8 +1870,8 @@ ${THEME_CSS}
     <div class="nav-actions">
       ${themeToggleMarkup()}
       <a class="btn btn-outline" href="/">Ir para Supabase</a>${MONITORING_ENABLED ? `
-      <a class="btn btn-outline" href="/beszel/">Servidor</a>
-      <a class="btn btn-outline" href="/dozzle/">Logs</a>` : ''}
+      <a class="btn btn-outline" href="/beszel/" target="_blank" rel="noopener" title="Saúde do servidor (abre em nova aba)">Beszel</a>
+      <a class="btn btn-outline" href="/dozzle/" target="_blank" rel="noopener" title="Logs dos containers (abre em nova aba)">Dozzle</a>` : ''}
       <a class="btn btn-outline" href="/login">Voltar</a>
       <a class="btn btn-outline" href="/logout">Sair</a>
     </div>
