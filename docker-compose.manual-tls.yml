@@ -6,7 +6,9 @@
 #
 # Nada é publicado na porta 80/443 do host: só esta porta nova
 # (SUPABASE_PROXY_PORT, padrão 9443) é exposta, então não há disputa de
-# porta com nada que já exista no servidor.
+# porta com nada que já exista no servidor. Num servidor dedicado ao
+# Supabase, SUPABASE_PROXY_PORT=443 e o override docker-compose.http.yml
+# (porta 80 -> HTTPS + renovação automática) - ver docs/novo-servidor.md.
 #
 # O Studio fica atrás de uma tela de abertura + login própria
 # (login-server.js), validada pelo Nginx via "auth_request" - substitui o
@@ -139,12 +141,17 @@ services:
         condition: service_healthy
     environment:
       PROXY_DOMAIN: ${PROXY_DOMAIN}
+      SUPABASE_PROXY_PORT: ${SUPABASE_PROXY_PORT:-9443}
+    # HTTPS_PORT_SUFFIX: a porta que o redirecionamento da porta 80 põe no
+    # endereço https (vazia na 443, ":9443" no servidor com a rádio).
     entrypoint:
       - /bin/sh
       - -c
       - |
         set -e
-        envsubst '$$PROXY_DOMAIN' < /etc/nginx/templates/nginx.conf.tpl > /etc/nginx/conf.d/default.conf
+        case "$$SUPABASE_PROXY_PORT" in 443) HTTPS_PORT_SUFFIX="" ;; *) HTTPS_PORT_SUFFIX=":$$SUPABASE_PROXY_PORT" ;; esac
+        export HTTPS_PORT_SUFFIX
+        envsubst '$$PROXY_DOMAIN $$HTTPS_PORT_SUFFIX' < /etc/nginx/templates/nginx.conf.tpl > /etc/nginx/conf.d/default.conf
         exec nginx -g 'daemon off;'
     volumes:
       - ./volumes/proxy/manual-tls/nginx.conf.tpl:/etc/nginx/templates/nginx.conf.tpl:ro

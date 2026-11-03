@@ -1,0 +1,24 @@
+# Override opcional: porta 80 para web, num servidor em que ela está livre
+# (servidor dedicado ao Supabase, sem a rádio - ver docs/novo-servidor.md).
+# Requer o override manual-tls.
+#
+# O Nginx passa a atender também a porta 80 do host:
+#   - http://SEU_DOMINIO/...  ->  301 para https://SEU_DOMINIO/...
+#     (nada é servido sem criptografia);
+#   - /.well-known/acme-challenge/ é servido da pasta /var/www/certbot do
+#     host, onde o certbot (modo webroot) põe o desafio da Let's Encrypt -
+#     assim o certificado renova sozinho sem parar nada.
+#
+# NÃO use no servidor com o AzuraCast: a porta 80 de lá é da rádio.
+#
+# Uso:
+#   sudo mkdir -p /var/www/certbot
+#   sh run.sh config add http
+#   sh run.sh start
+
+services:
+  nginx:
+    ports:
+      - "80:80"
+    volumes:
+      - /var/www/certbot:/var/www/certbot:ro

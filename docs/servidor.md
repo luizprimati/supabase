@@ -67,6 +67,10 @@ cadastrada (a impressão digital sai com
   da 9443 e só para admin. Ver [monitoramento.md](monitoramento.md).
 - `monitoring-agent` - agente do Beszel; só entra depois do passo "Add
   System" (precisa da chave do hub).
+- `http` - **não usar neste servidor**: publica a porta 80, que aqui é do
+  AzuraCast. Existe para servidores dedicados ao Supabase
+  ([novo-servidor.md](novo-servidor.md)), onde a 80 redireciona para o
+  HTTPS e renova o certificado.
 
 Confira o que está ativo agora com `sh run.sh config`.
 

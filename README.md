@@ -11,6 +11,12 @@ mais a configuração específica para esta instância.
 > [docs/oracle-cloud.md](docs/oracle-cloud.md)). Para atualizar depois, veja
 > [Manutenção](#manutenção-e-atualizações).
 
+> **Servidor novo, só com o Supabase (sem a rádio)?** O passo a passo
+> completo, com endereço sem porta (443), `http://` redirecionando e
+> certificado que renova sozinho, está em
+> [docs/novo-servidor.md](docs/novo-servidor.md). O resto deste README
+> descreve o servidor que divide a máquina com o AzuraCast.
+
 ## Diagnóstico do servidor (já feito)
 
 - **Capacidade: sobra.** ARM Ampere A1, 2 OCPUs / 12 GB RAM (~10 GB

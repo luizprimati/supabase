@@ -1,8 +1,9 @@
 # Template para o reverse proxy usado quando 80/443 já pertencem a outro
 # serviço no host (aqui: AzuraCast) e o certificado é emitido manualmente
-# via DNS-01 (veja docs/certbot-manual-dns.md). ${PROXY_DOMAIN} é resolvido
-# por envsubst na inicialização do container - as demais variáveis com $
-# são do próprio Nginx e não devem ser substituídas.
+# via DNS-01 (veja docs/certbot-manual-dns.md). ${PROXY_DOMAIN} e
+# ${HTTPS_PORT_SUFFIX} são resolvidos por envsubst na inicialização do
+# container (ver docker-compose.manual-tls.yml) - as demais variáveis com
+# $ são do próprio Nginx e não devem ser substituídas.
 
 upstream api_gw_upstream {
     server api-gw:8000;
@@ -30,6 +31,28 @@ map "$request_method:$http_sec_fetch_site" $cross_site_write {
     default 0;
     "~^(GET|HEAD|OPTIONS):" 0;
     "~:(same-site|cross-site)$" 1;
+}
+
+# Porta 80 (HTTP). Só chega aqui com o override docker-compose.http.yml,
+# que publica a 80 do host - no servidor com a rádio ela é do AzuraCast e
+# este bloco fica sem uso. Manda tudo para o HTTPS (nada do Supabase é
+# servido sem criptografia; o cookie de login nem funcionaria) e responde o
+# desafio da Let's Encrypt, para o certbot renovar o certificado pela
+# pasta /var/www/certbot sem parar nada (ver docs/novo-servidor.md).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PROXY_DOMAIN};
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://$host${HTTPS_PORT_SUFFIX}$request_uri;
+    }
 }
 
 server {
