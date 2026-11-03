@@ -25,6 +25,9 @@ Todo o resto (painel `/admin`, Edge Functions, Secrets, Dozzle, Beszel,
 limite de logs) é igual. Os comandos abaixo param no primeiro erro: se
 algum falhar, corrija e rode o mesmo bloco de novo.
 
+> **Os subdomínios ainda não existem?** Dá para instalar só com o IP e
+> trocar depois: veja [Começar só com o IP](#começar-só-com-o-ip-antes-do-dns).
+
 ## 0. Antes de começar
 
 - **Instância:** shape `VM.Standard.A1.Flex` (ARM), imagem **Canonical
@@ -366,6 +369,147 @@ Os logs dele aparecem no Dozzle (`painel-web`).
 
 Para usar outro nome ou porta de container, defina no `~/supabase/.env`
 `PAINEL_UPSTREAM=http://NOME:PORTA` e rode `sh run.sh recreate nginx`.
+
+## Começar só com o IP (antes do DNS)
+
+Dá para instalar tudo antes de os subdomínios existirem. Só o
+certificado de verdade depende do DNS: enquanto isso, o Nginx usa um
+certificado **provisório**, gerado no próprio servidor para o IP. O
+Supabase, o `/admin`, o Dozzle e o Beszel funcionam normalmente em
+`https://IP_DO_SERVIDOR`, mas o navegador avisa que a conexão "não é
+particular" (é o certificado provisório; clique em **Avançado →
+Continuar**). O endereço do painel (o sistema web) só entra na troca para
+os domínios, no fim.
+
+Use o IP **fixo** (reservado, passo 0). Se a instância ainda estiver
+com o IP efêmero, faça a troca antes de começar: ela muda o IP.
+
+Ordem: passos **0, 1 e 3** normais (no 3.1, se ainda não souber o e-mail,
+deixe o de exemplo: ele só é usado na troca). Pule o 2 e o 4, e siga os
+blocos abaixo no lugar dos passos 5 e 6.
+
+**I.1. Anotar o IP** no mesmo arquivo do 3.1:
+
+```bash
+read -r -p 'IP público do servidor: ' IP \
+  && { printf '%s' "$IP" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || { echo 'Isso não parece um IP (exemplo: 123.45.67.89).'; false; }; } \
+  && printf 'IP=%s\n' "$IP" >> ~/novo-servidor.conf && cat ~/novo-servidor.conf
+```
+
+**I.2. Certificado provisório** (no lugar do passo 4). Aparecem umas
+linhas de pontos e `+` enquanto a chave é gerada; é normal.
+
+```bash
+. ~/novo-servidor.conf && [ -n "$IP" ] && sudo mkdir -p /etc/letsencrypt/live/"$IP" /var/www/certbot \
+  && sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=$IP" -addext "subjectAltName=IP:$IP" \
+       -keyout /etc/letsencrypt/live/"$IP"/privkey.pem -out /etc/letsencrypt/live/"$IP"/fullchain.pem \
+  && sudo ls /etc/letsencrypt/live/"$IP"/
+```
+
+O esperado na última linha: `fullchain.pem  privkey.pem`.
+
+**I.3. Baixar o projeto e gerar as chaves** (no lugar do passo 5). É o
+mesmo bloco do passo 5, com o IP no lugar do domínio do Supabase. O
+`SITE_URL` e o `PAINEL_DOMAIN` já ficam com o endereço definitivo do
+painel.
+
+```bash
+. ~/novo-servidor.conf && [ -n "$IP" ] && cd ~ && git clone https://github.com/luizprimati/supabase.git && cd ~/supabase \
+  && cp .env.example .env && chmod 600 .env \
+  && sh utils/generate-keys.sh --update-env > /dev/null \
+  && sh utils/add-new-auth-keys.sh --update-env > /dev/null \
+  && sed -i \
+       -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=https://$IP|" \
+       -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$IP/auth/v1|" \
+       -e "s|^SITE_URL=.*|SITE_URL=https://$PAINEL|" \
+       -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$IP|" .env \
+  && printf '\nSUPABASE_PROXY_PORT=443\nPAINEL_DOMAIN=%s\nPROJECT_TITLE=Brancaleone\nPROJECT_TAGLINE=Painel administrativo\nBESZEL_USER_PASSWORD=%s\n' "$PAINEL" "$(openssl rand -hex 24)" >> .env \
+  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE)=' .env \
+  && grep -c '^JWT_SECRET=.\{32,\}' .env
+```
+
+Tem que aparecer as sete linhas (três delas com o IP) e, na última, `1`.
+
+**I.4. Subir tudo** (no lugar do passo 6). Igual ao passo 6, mas ainda
+sem o override `painel` e sem a parte do certbot:
+
+```bash
+cd ~/supabase \
+  && cp volumes/proxy/manual-tls/users.example.json volumes/proxy/manual-tls/users.json \
+  && cp volumes/proxy/manual-tls/backup-config.example.json volumes/proxy/manual-tls/backup-config.json \
+  && cp docker-compose.override.yml.example docker-compose.override.yml \
+  && sh run.sh config add manual-tls override http monitoring \
+  && sh run.sh start \
+  && docker exec supabase-beszel /beszel superuser upsert monitor@beszel.local "$(openssl rand -hex 32)"
+```
+
+A última linha deve dizer `Successfully saved superuser`.
+
+**I.5. Admin e Beszel:** passos **7 e 8** normais. Onde eles dizem
+`https://supabase.brancaleone.com.br`, abra `https://IP_DO_SERVIDOR` e
+aceite o aviso do navegador uma vez.
+
+**I.6. Conferir:**
+
+```bash
+. ~/novo-servidor.conf && cd ~/supabase && sh run.sh status \
+  && curl -sk -o /dev/null -w 'supabase: %{http_code}\n' "https://$IP/login" \
+  && curl -s -o /dev/null -w 'http: %{http_code} -> %{redirect_url}\n' "http://$IP/login" \
+  && curl -sk -o /dev/null -w 'dozzle sem login: %{http_code} -> %{redirect_url}\n' "https://$IP/dozzle/" \
+  && sudo ss -tlnp | grep -E ':(80|443|3000|5432|6543|8000)\s'
+```
+
+O esperado: serviços `Up`, `supabase: 200`, `http: 301 -> https://IP/login`,
+`dozzle sem login: 302 -> https://IP/login?rd=/dozzle/` e, nas portas, só
+a 80 e a 443 para fora.
+
+### Trocar o IP pelos domínios (quando o DNS estiver pronto)
+
+1. Crie os dois registros A do [passo 2](#2-dns) e confira se o servidor
+   já enxerga os dois no IP certo:
+
+   ```bash
+   . ~/novo-servidor.conf && echo "IP do servidor: $IP" && for d in "$DOMINIO" "$PAINEL"; do echo "$d -> $(getent ahostsv4 "$d" | awk 'NR==1{print $1}')"; done
+   ```
+
+   Os dois têm que mostrar o IP do servidor. Confira também se o `EMAIL`
+   em `~/novo-servidor.conf` é o seu (`nano ~/novo-servidor.conf`).
+
+2. Emitir o certificado de verdade e trocar o endereço. O Nginx já
+   atende a porta 80, então o certbot usa a pasta `/var/www/certbot` sem
+   parar nada (e a renovação já fica configurada assim). Depois, o `.env`
+   passa a usar o domínio, o override `painel` entra e o certificado
+   provisório é apagado:
+
+   ```bash
+   . ~/novo-servidor.conf && [ -n "$IP" ] && sudo apt-get install -y certbot \
+     && sudo certbot certonly --webroot --webroot-path /var/www/certbot -d "$DOMINIO" -d "$PAINEL" -m "$EMAIL" --agree-tos --no-eff-email --keep-until-expiring \
+     && sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy \
+     && printf '#!/bin/sh\n# Certificado renovado: o Nginx do Supabase relê os arquivos sem derrubar nada.\ndocker exec supabase-nginx-manual nginx -s reload\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/recarregar-nginx-supabase.sh > /dev/null \
+     && sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/recarregar-nginx-supabase.sh \
+     && cd ~/supabase \
+     && sed -i \
+          -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=https://$DOMINIO|" \
+          -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$DOMINIO/auth/v1|" \
+          -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$DOMINIO|" .env \
+     && { docker network inspect painel > /dev/null 2>&1 || docker network create painel; } \
+     && sh run.sh config add painel \
+     && sh run.sh start \
+     && sh run.sh restart nginx \
+     && sudo certbot renew --dry-run \
+     && sudo rm -f /etc/letsencrypt/live/"$IP"/fullchain.pem /etc/letsencrypt/live/"$IP"/privkey.pem \
+     && { ! sudo test -d /etc/letsencrypt/live/"$IP" || sudo rmdir /etc/letsencrypt/live/"$IP"; }
+   ```
+
+   O esperado: `Successfully received certificate`, os serviços subindo
+   de novo e `Congratulations, all simulated renewals succeeded`. Se
+   parar no certbot, nada mudou ainda: corrija (DNS, porta 80, e-mail) e
+   rode o bloco de novo.
+
+3. Siga a partir do [passo 9](#9-conferir) (conferir), já com os
+   domínios. Como o endereço mudou, entre de novo no
+   `https://supabase.brancaleone.com.br`: o login feito pelo IP não vale
+   no domínio.
 
 ## Opcionais
 
