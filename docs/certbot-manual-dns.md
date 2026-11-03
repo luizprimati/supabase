@@ -8,8 +8,12 @@ TXT no painel de DNS. O domínio `primati.com.br` está no registro.br, que
 não tem API pública de DNS para automatizar isso — o processo é manual, leva
 ~2 minutos a cada emissão/renovação.
 
-O certificado dura 90 dias; renove a cada ~60 dias (dá folga antes de
-vencer). Não há necessidade de portas abertas para nada disso.
+O certificado dura 90 dias, mas os emitidos a partir de 10/02/2027 duram
+64 dias, e a partir de 16/02/2028, 45 dias (mudança anunciada pela Let's
+Encrypt). Por isso não use um intervalo fixo: renove quando faltarem ~20
+dias para vencer. A cada renovação, veja a data com `sudo certbot
+certificates` e marque o lembrete para 20 dias antes dela. Não há
+necessidade de portas abertas para nada disso.
 
 ## Instalar o certbot (uma vez)
 
@@ -74,7 +78,7 @@ basta para ele pegar os arquivos novos:
 sh run.sh restart nginx
 ```
 
-## Renovar (a cada ~60 dias)
+## Renovar (quando faltarem ~20 dias para vencer)
 
 Mesmo comando de emissão funciona para renovar:
 
@@ -90,6 +94,8 @@ restart nginx`).
 ### Lembrete
 
 Configure um lembrete recorrente (agenda, cron de e-mail, o que for prático
-para você) para daqui a ~60 dias — não há renovação automática nesse modo.
+para você) para 20 dias antes do vencimento que o `sudo certbot
+certificates` mostra — não há renovação automática nesse modo, e a Let's
+Encrypt não manda mais e-mail avisando (o serviço acabou em 04/06/2025).
 Se `curl -vI https://supabase.primati.com.br:9443 2>&1 | grep expire`
 começar a mostrar uma data próxima, é sinal de que está na hora.

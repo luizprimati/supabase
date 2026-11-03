@@ -11,9 +11,9 @@ mais a configuração específica para esta instância.
 > [docs/oracle-cloud.md](docs/oracle-cloud.md)). Para atualizar depois, veja
 > [Manutenção](#manutenção-e-atualizações).
 
-> **Servidor novo, só com o Supabase (sem a rádio)?** O passo a passo
-> completo, com endereço sem porta (443), `http://` redirecionando e
-> certificado que renova sozinho, está em
+> **Servidor novo, sem a rádio?** O passo a passo completo, com endereço
+> sem porta (443), `http://` redirecionando, certificado que renova sozinho
+> e um segundo endereço para um sistema web seu no mesmo servidor, está em
 > [docs/novo-servidor.md](docs/novo-servidor.md). O resto deste README
 > descreve o servidor que divide a máquina com o AzuraCast.
 
@@ -418,7 +418,8 @@ registrado para não repetir o mesmo caminho:
   deixam de validar.
 - Configure backup do volume `volumes/db/data` (ou do Postgres via
   `pg_dump`) — não há backup automático nesta stack.
-- Configure um lembrete para renovar o certificado a cada ~60 dias (veja
+- Configure um lembrete para renovar o certificado quando faltarem ~20
+  dias para vencer (a validade cai de 90 para 64 dias em 2027; veja
   [docs/certbot-manual-dns.md](docs/certbot-manual-dns.md)) — não é
   automático nesse modo.
 

@@ -19,7 +19,8 @@ fundo. Mantenha atualizado quando algo mudar (domínio, caminho, decisão).
   **registro.br** (não é mais o Wix/`valletibooks.com.br` - domínio
   antigo, migração já concluída).
 - **Certificado:** emitido manualmente via DNS-01 (registro.br não tem
-  API de DNS) - renovar a cada ~60 dias, passo a passo em
+  API de DNS) - renovar quando faltarem ~20 dias para vencer (a validade
+  cai para 64 dias em 2027 e 45 em 2028), passo a passo em
   [certbot-manual-dns.md](certbot-manual-dns.md).
 
 ## Este servidor NÃO é só do Supabase
@@ -71,6 +72,10 @@ cadastrada (a impressão digital sai com
   AzuraCast. Existe para servidores dedicados ao Supabase
   ([novo-servidor.md](novo-servidor.md)), onde a 80 redireciona para o
   HTTPS e renova o certificado.
+- `painel` - também só para servidor dedicado: um segundo endereço
+  (`PAINEL_DOMAIN`) que o mesmo Nginx repassa para um sistema web seu
+  (container `painel-web`, rede `painel`). Ver
+  [novo-servidor.md](novo-servidor.md#10-colocar-o-sistema-web-no-painel).
 
 Confira o que está ativo agora com `sh run.sh config`.
 

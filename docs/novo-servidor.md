@@ -1,21 +1,29 @@
-# Instalar num servidor novo (Oracle, Ubuntu, só Supabase)
+# Instalar num servidor novo (Oracle, Ubuntu, sem a rádio)
 
 Passo a passo para montar a mesma estrutura deste repositório (Supabase +
 tela de login/painel `/admin` + Dozzle + Beszel + limite de logs) num
-servidor Oracle **dedicado**, com o projeto começando vazio.
+servidor Oracle **dedicado**, com o projeto começando vazio, e com um
+segundo endereço para um sistema web seu (Node.js) no mesmo servidor.
+
+Exemplo usado em todo o guia (é o servidor da Brancaleone):
+
+| Endereço | O que abre |
+|---|---|
+| `https://supabase.brancaleone.com.br` | O Supabase completo, igual ao servidor atual: tela de abertura, `/admin`, Studio, API, Dozzle e Beszel |
+| `https://painel.brancaleone.com.br` | O seu sistema web (Node.js), num container próprio. Até ele existir, uma página de "em breve" |
 
 O que muda em relação ao servidor atual, que divide a máquina com a rádio:
 
-| | Servidor atual (com AzuraCast) | Servidor novo (só Supabase) |
+| | Servidor atual (com AzuraCast) | Servidor novo |
 |---|---|---|
-| Endereço | `https://dominio:9443` | `https://dominio` (porta 443 padrão); `http://dominio` redireciona para ele |
-| Certificado HTTPS | Manual, pelo DNS do registro.br, a cada ~60 dias | **Automático**: renova sozinho pela porta 80, sem parar nada |
+| Endereço | `https://dominio:9443` | `https://dominio` (porta 443 padrão); `http://` redireciona para `https://` |
+| Certificado HTTPS | Manual, pelo DNS do registro.br, quando faltam ~20 dias para vencer | **Automático**: um certificado com os dois nomes, renovado sozinho pela porta 80, sem parar nada |
 | Portas abertas | 9443 | 80 e 443 |
-| Overrides (`sh run.sh config`) | `manual-tls`, `override`, `monitoring`, `monitoring-agent` | os mesmos **+ `http`** (porta 80) |
+| Overrides (`sh run.sh config`) | `manual-tls`, `override`, `monitoring`, `monitoring-agent` | os mesmos **+ `http`** (porta 80) **+ `painel`** (o segundo endereço) |
 
-Todo o resto (painel, Edge Functions, Secrets, Dozzle, Beszel, limite de
-logs) é igual. Os comandos abaixo param no primeiro erro: se algum
-falhar, corrija e rode o mesmo bloco de novo.
+Todo o resto (painel `/admin`, Edge Functions, Secrets, Dozzle, Beszel,
+limite de logs) é igual. Os comandos abaixo param no primeiro erro: se
+algum falhar, corrija e rode o mesmo bloco de novo.
 
 ## 0. Antes de começar
 
@@ -23,12 +31,35 @@ falhar, corrija e rode o mesmo bloco de novo.
   Ubuntu 24.04** (aarch64). Recursos: 4 OCPUs / 24 GB se a conta tiver a
   cota gratuita livre; o mínimo confortável é 2 OCPUs / 12 GB. Disco de
   inicialização: 100 GB ou mais (a cota gratuita dá 200 GB no total).
-- **IP público** na instância. Recomendado reservar um IP fixo
-  (**Networking → IP Management → Reserved Public IPs**), senão o IP muda
-  se a instância for recriada.
-- **Domínio ou subdomínio** que você controla, por exemplo
-  `supabase2.primati.com.br`.
-- Um **e-mail** para o cadastro na Let's Encrypt.
+- **Chave SSH:** ao criar a instância, em **Add SSH keys** escolha
+  **Paste public keys** e cole a chave pública do seu computador (a mesma
+  que você usa no servidor atual, por exemplo o conteúdo de
+  `~/.ssh/id_ed25519.pub`). Se escolher **Generate a key pair for me**,
+  baixe a chave privada na hora (ela só aparece ali) e entre com
+  `ssh -i caminho/da/chave.key ubuntu@IP` (antes, no Linux/macOS:
+  `chmod 600 caminho/da/chave.key`).
+- **IP público fixo (faça antes do passo 2).** O IP que a instância recebe
+  na criação é *efêmero*: ele não vira fixo, e trocar por um reservado
+  **muda o IP**. Para fixar: **Compute → Instances → (instância) → Attached
+  VNICs → (VNIC) → IPv4 Addresses** → no IP privado primário, **⋮ → Edit**
+  → **No public IP** → **Update**; depois **⋮ → Edit** de novo →
+  **Reserved public IP** → **Create new reserved IP** → **Update**. Use
+  esse IP no DNS (passo 2) e no `ssh`. Só criar o IP em **Networking → IP
+  Management → Reserved Public IPs**, sem esta troca, não muda nada na
+  instância.
+- **Conta Pay As You Go.** Numa conta só *Always Free*, a Oracle pode
+  **parar** instâncias que passem 7 dias com pouco uso de CPU, rede e
+  memória, e um Supabase com pouco acesso pode cair nessa regra (no
+  servidor atual a rádio mantém a máquina ocupada). Em **Billing & Cost
+  Management → Upgrade and Manage Payment**, converta a conta para *Pay As
+  You Go*: os recursos Always Free (A1 com 4 OCPUs/24 GB, 200 GB de disco)
+  continuam sem custo, e a regra de instância ociosa deixa de valer. Crie
+  também um **Budget** com alerta baixo (por exemplo US$ 1) para ser avisado
+  se algo sair da cota gratuita.
+- Acesso ao **DNS** de `brancaleone.com.br`.
+- Um **e-mail** para o certbot. A Let's Encrypt não manda mais aviso de
+  vencimento (acabou em 04/06/2025) e não guarda o e-mail: ele só entra na
+  lista de novidades da ISRG.
 
 ## 1. Rede na Oracle (console)
 
@@ -39,10 +70,11 @@ List** → **Add Ingress Rules**, duas regras:
 | Origem | Protocolo | Porta destino | Para quê |
 |---|---|---|---|
 | `0.0.0.0/0` | TCP | 80 | Web: redireciona para o HTTPS e renova o certificado |
-| `0.0.0.0/0` | TCP | 443 | Supabase, painel, Dozzle e Beszel |
+| `0.0.0.0/0` | TCP | 443 | Supabase, painel `/admin`, Dozzle, Beszel e o sistema web |
 
-Não abra 5432, 6543, 8000 nem 3000: banco, pooler, gateway e Studio
-nunca ficam públicos.
+Não abra 5432, 6543, 8000, 3000 nem a porta do seu sistema: banco,
+pooler, gateway, Studio e o sistema web nunca ficam públicos direto, só
+pelo Nginx na 443.
 
 > **Pegadinha já vista no servidor atual:** um Network Security Group
 > (NSG) só vale se estiver anexado à placa de rede da instância
@@ -51,28 +83,37 @@ nunca ficam públicos.
 
 ## 2. DNS
 
-No painel de DNS do domínio (no registro.br: **Meus domínios →
-domínio → DNS**), crie um registro **A** com o nome do subdomínio
-apontando para o IP público da instância. Confira de qualquer lugar:
+No painel de DNS de `brancaleone.com.br` (no registro.br: **Meus
+domínios → brancaleone.com.br → DNS**), crie **dois** registros tipo
+**A**, os dois apontando para o IP público da instância:
+
+| Tipo | Nome | Valor |
+|---|---|---|
+| A | `supabase` | IP público da instância |
+| A | `painel` | IP público da instância |
+
+Não crie registro **AAAA** (IPv6) para eles: a instância não usa IPv6
+aqui, e a Let's Encrypt tentaria por ele. Confira:
 
 ```bash
-dig +short supabase2.primati.com.br
+dig +short supabase.brancaleone.com.br; dig +short painel.brancaleone.com.br
 ```
 
-Só siga para o passo 4 (certificado) quando aparecer o IP certo.
+Só siga para o passo 4 (certificado) quando os dois mostrarem o IP certo.
 
 ## 3. Preparar o servidor (SSH)
 
-Entre com `ssh ubuntu@IP_DO_SERVIDOR`.
+Entre com `ssh ubuntu@IP_DO_SERVIDOR` (ou `ssh -i chave.key ubuntu@IP_DO_SERVIDOR`, se a Oracle gerou a chave).
 
 **3.1. Seus dados, uma vez só.** Os próximos blocos leem daqui, então
 funcionam mesmo se você abrir outra sessão SSH no meio:
 
 ```bash
-printf 'DOMINIO=supabase2.primati.com.br\nEMAIL=voce@exemplo.com\n' > ~/novo-servidor.conf && nano ~/novo-servidor.conf
+printf 'DOMINIO=supabase.brancaleone.com.br\nPAINEL=painel.brancaleone.com.br\nEMAIL=voce@exemplo.com\n' > ~/novo-servidor.conf && nano ~/novo-servidor.conf
 ```
 
-Troque pelo seu domínio e e-mail, salve (Ctrl+O, Enter) e saia (Ctrl+X).
+Troque `voce@exemplo.com` pelo seu e-mail, salve (Ctrl+O, Enter) e saia
+(Ctrl+X).
 
 **3.2. Atualizar e abrir 80/443 no firewall da instância.** A imagem
 Ubuntu da Oracle vem com um firewall (`iptables`) que recusa tudo, menos
@@ -82,15 +123,17 @@ instalado ele gravaria também as regras dinâmicas do Docker.
 
 ```bash
 sudo apt-get update && sudo apt-get -y upgrade \
-  && sudo iptables -I INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT \
-  && sudo iptables -I INPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT \
+  && { sudo iptables -C INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT 2>/dev/null || sudo iptables -I INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT; } \
+  && { sudo iptables -C INPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT 2>/dev/null || sudo iptables -I INPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT; } \
+  && { [ ! -e /usr/bin/dockerd ] || { echo 'Docker já instalado: não salve (gravaria as regras do Docker).'; false; }; } \
   && sudo netfilter-persistent save \
   && sudo iptables -L INPUT -n --line-numbers
 ```
 
-As regras de 80 e 443 têm que aparecer **antes** da linha `REJECT`. Se o
-`upgrade` atualizou o kernel, reinicie agora (`sudo reboot`) e entre de
-novo.
+As regras de 80 e 443 têm que aparecer **antes** da linha `REJECT`. O
+bloco pode ser rodado de novo sem duplicar nada; com o Docker já
+instalado ele para antes de salvar, de propósito. Se o `upgrade` atualizou
+o kernel, reinicie agora (`sudo reboot`) e entre de novo.
 
 **3.3. Instalar o Docker** (repositório oficial; o Compose vem junto):
 
@@ -114,16 +157,16 @@ docker compose version && docker run --rm hello-world | head -2
 
 ## 4. Primeiro certificado HTTPS
 
-A Let's Encrypt confere que você controla o domínio acessando a porta 80
-do servidor. Nesta primeira vez o Supabase ainda não está no ar, então o
-próprio certbot atende a porta 80 por alguns segundos (`--standalone`).
-Depois que tudo subir (passo 6), a renovação passa a ser feita pelo Nginx
-do Supabase, sem parar nada. O gancho criado aqui faz o Nginx reler o
-certificado a cada renovação.
+Um certificado só, com os dois nomes. A Let's Encrypt confere que você
+controla os domínios acessando a porta 80 do servidor. Nesta primeira vez
+o Supabase ainda não está no ar, então o próprio certbot atende a porta
+80 por alguns segundos (`--standalone`). Depois que tudo subir (passo 6),
+a renovação passa a ser feita pelo Nginx, sem parar nada. O gancho criado
+aqui faz o Nginx reler o certificado a cada renovação.
 
 ```bash
 . ~/novo-servidor.conf && sudo apt-get install -y certbot \
-  && sudo certbot certonly --standalone -d "$DOMINIO" -m "$EMAIL" --agree-tos --no-eff-email \
+  && sudo certbot certonly --standalone -d "$DOMINIO" -d "$PAINEL" -m "$EMAIL" --agree-tos --no-eff-email \
   && sudo mkdir -p /var/www/certbot \
   && printf '#!/bin/sh\n# Certificado renovado: o Nginx do Supabase relê os arquivos sem derrubar nada.\ndocker exec supabase-nginx-manual nginx -s reload\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/recarregar-nginx-supabase.sh > /dev/null \
   && sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/recarregar-nginx-supabase.sh \
@@ -131,16 +174,21 @@ certificado a cada renovação.
 ```
 
 O esperado: `Successfully received certificate` e, na última linha,
-`cert.pem chain.pem fullchain.pem privkey.pem README`. Se a Let's Encrypt
-não conseguir falar com o servidor (`Timeout during connect`), a porta 80
-ainda está fechada na Security List (passo 1) ou no `iptables` (passo
-3.2), ou o DNS (passo 2) ainda não aponta para este IP.
+`cert.pem chain.pem fullchain.pem privkey.pem README`. A pasta tem o nome
+do primeiro domínio (`supabase...`), mas o certificado vale para os dois.
+Se a Let's Encrypt não conseguir falar com o servidor (`Timeout during
+connect`), a porta 80 ainda está fechada na Security List (passo 1) ou no
+`iptables` (confira com `sudo iptables -L INPUT -n --line-numbers`: a
+linha `tcp dpt:80` tem que vir antes do `REJECT`), ou o DNS (passo 2) ainda
+não aponta para este IP.
 
 ## 5. Baixar o projeto e gerar as chaves
 
 As chaves (senha do banco, JWT, chaves da API) são novas e só deste
 servidor. Os scripts gravam direto no `.env`; a saída vai para
-`/dev/null` para as chaves não ficarem na tela.
+`/dev/null` para as chaves não ficarem na tela. O `SITE_URL` (para onde
+os e-mails de confirmação e os logins do Auth mandam o usuário de volta)
+aponta para o sistema web do painel.
 
 ```bash
 . ~/novo-servidor.conf && cd ~ && git clone https://github.com/luizprimati/supabase.git && cd ~/supabase \
@@ -150,40 +198,32 @@ servidor. Os scripts gravam direto no `.env`; a saída vai para
   && sed -i \
        -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=https://$DOMINIO|" \
        -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$DOMINIO/auth/v1|" \
-       -e "s|^SITE_URL=.*|SITE_URL=https://$DOMINIO|" \
+       -e "s|^SITE_URL=.*|SITE_URL=https://$PAINEL|" \
        -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$DOMINIO|" .env \
-  && printf '\nSUPABASE_PROXY_PORT=443\nBESZEL_USER_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env \
-  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT)=' .env \
+  && printf '\nSUPABASE_PROXY_PORT=443\nPAINEL_DOMAIN=%s\nPROJECT_TITLE=Brancaleone\nPROJECT_TAGLINE=Painel administrativo\nBESZEL_USER_PASSWORD=%s\n' "$PAINEL" "$(openssl rand -hex 24)" >> .env \
+  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE)=' .env \
   && grep -c '^JWT_SECRET=.\{32,\}' .env
 ```
 
-Tem que aparecer as cinco linhas com o seu domínio e, na última, `1`
+Tem que aparecer as sete linhas com os seus endereços e, na última, `1`
 (o `JWT_SECRET` foi gerado).
-
-Opcional: o texto da tela de abertura. Sem isto ela mostra o título do
-servidor atual. Acrescente no `.env` (com `nano ~/supabase/.env`):
-
-```dotenv
-PROJECT_TITLE=Nome do projeto
-PROJECT_TAGLINE=Painel administrativo
-PROJECT_DESCRIPTION=Área restrita à equipe autorizada.
-```
 
 ## 6. Subir tudo
 
-Cria os arquivos que precisam existir antes da primeira subida, liga os
-overrides (Nginx + login, banco só em `127.0.0.1`, porta 80,
-monitoramento) e sobe.
-A primeira vez baixa as imagens (alguns GB) e leva alguns minutos. No fim,
-troca a senha do superusuário do Beszel por uma aleatória (ver
-[monitoramento.md](monitoramento.md)).
+Cria os arquivos que precisam existir antes da primeira subida, cria a
+rede `painel` (por onde o Nginx fala com o seu sistema), liga os
+overrides (Nginx + login, banco só em `127.0.0.1`, porta 80, monitoramento
+e o painel) e sobe. A primeira vez baixa as imagens (alguns GB) e leva
+alguns minutos. No fim, troca a senha do superusuário do Beszel por uma
+aleatória (ver [monitoramento.md](monitoramento.md)).
 
 ```bash
 cd ~/supabase \
   && cp volumes/proxy/manual-tls/users.example.json volumes/proxy/manual-tls/users.json \
   && cp volumes/proxy/manual-tls/backup-config.example.json volumes/proxy/manual-tls/backup-config.json \
   && cp docker-compose.override.yml.example docker-compose.override.yml \
-  && sh run.sh config add manual-tls override http monitoring \
+  && { docker network inspect painel > /dev/null 2>&1 || docker network create painel; } \
+  && sh run.sh config add manual-tls override http monitoring painel \
   && sh run.sh start \
   && docker exec supabase-beszel /beszel superuser upsert monitor@beszel.local "$(openssl rand -hex 32)"
 ```
@@ -192,9 +232,9 @@ A última linha deve dizer `Successfully saved superuser`.
 
 **Renovação pelo Nginx.** Agora que o Nginx atende a porta 80, a
 renovação do certificado passa a usar a pasta `/var/www/certbot` (que ele
-serve em `/.well-known/acme-challenge/`) em vez do `--standalone`, que
-precisaria da porta 80 livre. O `reconfigure` já testa a renovação nova;
-o `renew --dry-run` confirma:
+serve em `/.well-known/acme-challenge/`, para os dois endereços) em vez do
+`--standalone`, que precisaria da porta 80 livre. O `reconfigure` já
+testa a renovação nova; o `renew --dry-run` confirma:
 
 ```bash
 . ~/novo-servidor.conf && sudo certbot reconfigure --cert-name "$DOMINIO" --webroot --webroot-path /var/www/certbot \
@@ -206,7 +246,7 @@ O esperado: `Congratulations, all simulated renewals succeeded` e o
 `certbot.timer` agendado (ele confere duas vezes por dia e só renova perto
 do vencimento).
 
-## 7. Criar o primeiro admin do painel
+## 7. Criar o primeiro admin do painel `/admin`
 
 O `users.json` veio com um usuário de exemplo sem senha válida. Este
 bloco troca ele pelo seu admin: pergunta o usuário e a senha (que não
@@ -225,15 +265,16 @@ process.stdin.on("data", (d) => (p += d)).on("end", () => {
 });'; unset P
 ```
 
-Abra `https://SEU_DOMINIO` no navegador, clique em **Entrar** e use esse
-usuário. Os outros usuários você cria pelo `/admin` → **Usuários**.
+Abra `https://supabase.brancaleone.com.br` no navegador, clique em
+**Entrar** e use esse usuário. Os outros usuários você cria pelo `/admin`
+→ **Usuários**.
 
 ## 8. Conectar o agente do Beszel
 
-1. Abra `https://SEU_DOMINIO/beszel/` e clique em **Add System**, na
-   aba **Docker**.
-2. **Name:** o nome do servidor. **Host / IP:**
-   `/beszel_socket/beszel.sock` (o campo de porta some sozinho).
+1. Abra `https://supabase.brancaleone.com.br/beszel/` e clique em **Add
+   System**, na aba **Docker**.
+2. **Name:** `brancaleone`. **Host / IP:** `/beszel_socket/beszel.sock`
+   (o campo de porta some sozinho).
 3. Copie a **Public Key** e clique em **Add System**.
 4. No servidor, cole a chave quando o bloco pedir:
 
@@ -247,18 +288,84 @@ Em até 1 minuto o sistema fica verde no Beszel.
 
 ```bash
 . ~/novo-servidor.conf && cd ~/supabase && sh run.sh status \
-  && curl -s -o /dev/null -w 'site: %{http_code}\n' "https://$DOMINIO/login" \
+  && curl -s -o /dev/null -w 'supabase: %{http_code}\n' "https://$DOMINIO/login" \
   && curl -s -o /dev/null -w 'http: %{http_code} -> %{redirect_url}\n' "http://$DOMINIO/login" \
   && curl -s -o /dev/null -w 'dozzle sem login: %{http_code} -> %{redirect_url}\n' "https://$DOMINIO/dozzle/" \
+  && curl -s -o /dev/null -w 'painel: %{http_code}\n' "https://$PAINEL/" \
   && sudo ss -tlnp | grep -E ':(80|443|3000|5432|6543|8000)\s'
 ```
 
 O esperado:
 - todos os serviços `Up` (e `healthy` os que têm healthcheck);
-- `site: 200`, `http: 301 -> https://SEU_DOMINIO/login` e
-  `dozzle sem login: 302 -> https://SEU_DOMINIO/login?rd=/dozzle/`;
+- `supabase: 200`, `http: 301 -> https://supabase.brancaleone.com.br/login`
+  e `dozzle sem login: 302 -> https://supabase.brancaleone.com.br/login?rd=/dozzle/`;
+- `painel: 503` enquanto o seu sistema não estiver no ar (é a página de
+  "em breve"); depois, o código que o seu sistema responder;
 - na lista de portas, só a **80** e a **443** abertas para fora
   (`0.0.0.0`), e a 5432/6543 em `127.0.0.1`.
+
+## 10. Colocar o sistema web no painel
+
+O seu sistema roda no projeto Docker dele (um repositório seu, separado
+deste), ligado à rede `painel`, **sem publicar porta nenhuma**. O Nginx
+encontra o container pelo nome `painel-web`, na porta `3000`, e cuida do
+HTTPS. Não precisa mexer no Nginx nem reiniciar nada: assim que o
+container sobe, `https://painel.brancaleone.com.br` passa a mostrar o
+sistema; se ele parar, volta a página de "em breve".
+
+No repositório do sistema, um `Dockerfile` (exemplo para Node.js):
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+ENV NODE_ENV=production PORT=3000
+CMD ["node", "server.js"]
+```
+
+E um `docker-compose.yml`:
+
+```yaml
+services:
+  web:
+    container_name: painel-web
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - painel
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  painel:
+    external: true
+```
+
+Regras para o sistema funcionar atrás do Nginx:
+- Escutar em `0.0.0.0:3000` (não em `localhost`), senão o Nginx não
+  alcança.
+- O HTTPS termina no Nginx: o sistema recebe HTTP e o header
+  `X-Forwarded-Proto: https`. No Express, `app.set('trust proxy', 1)`
+  para cookies `secure` e redirecionamentos saírem certos.
+- Para falar com o Supabase: URL `https://supabase.brancaleone.com.br` e
+  a chave pública (`ANON_KEY` ou `SUPABASE_PUBLISHABLE_KEY` do
+  `~/supabase/.env`). A `SERVICE_ROLE_KEY`/`SUPABASE_SECRET_KEY` só no
+  código de servidor do sistema, nunca no navegador.
+- Se o repositório do sistema for privado, o servidor puxa com uma
+  *deploy key* só de leitura, como o chat-IA faz no servidor atual (ver
+  [servidor.md](servidor.md)).
+
+Subir e atualizar: `cd ~/pasta-do-sistema && git pull --ff-only && docker compose up -d --build`.
+Os logs dele aparecem no Dozzle (`painel-web`).
+
+Para usar outro nome ou porta de container, defina no `~/supabase/.env`
+`PAINEL_UPSTREAM=http://NOME:PORTA` e rode `sh run.sh recreate nginx`.
 
 ## Opcionais
 
@@ -267,19 +374,27 @@ O esperado:
   Num servidor novo, o endereço de retorno (redirect URI) das credenciais
   do Google muda para o domínio novo.
 - **E-mails do Auth** (confirmação de cadastro, troca de senha): o `.env`
-  vem com um SMTP de mentira (`SMTP_*`). Para o app mandar e-mail de
+  vem com um SMTP de mentira (`SMTP_*`). Para o sistema mandar e-mail de
   verdade, preencha com um provedor real.
 - **Painel de Schemas** publicando sozinho: [schemas-panel.md](schemas-panel.md).
 
 ## Manutenção
 
-- **Certificado:** nada a fazer. Para conferir:
-  `sudo certbot certificates` (mostra a validade). Não desligue o
-  override `http`: sem a porta 80, a renovação para de funcionar.
-- **Atualizar o projeto** quando houver novidade neste repositório:
+- **Certificado:** renova sozinho, mas ninguém avisa se falhar. De vez
+  em quando rode `sudo certbot certificates`: a validade
+  (`VALID: N days`) deve ficar acima de 30 dias, que é quando o certbot
+  renova. Se estiver abaixo, veja o erro com
+  `sudo journalctl -u certbot.service --since -7d --no-pager`. Não desligue
+  o override `http`: sem a porta 80, a renovação para de funcionar.
+- **Atualizar o Supabase** quando houver novidade neste repositório:
   `cd ~/supabase && git pull --ff-only && sh run.sh start` (recria só o
-  que mudou) e, se mudou o Nginx ou o login, `sh run.sh restart nginx`.
+  que mudou) e, se mudou algo em `volumes/proxy/manual-tls/` (Nginx, login
+  ou o site do painel), `sh run.sh recreate login nginx`.
+- **Outro endereço no certificado** (um terceiro subdomínio, por
+  exemplo): crie o registro A e rode
+  `sudo certbot certonly --webroot -w /var/www/certbot --cert-name supabase.brancaleone.com.br -d supabase.brancaleone.com.br -d painel.brancaleone.com.br -d NOVO.brancaleone.com.br`
+  (sempre com **todos** os nomes).
 - O resto (cortar acesso de alguém, atualizar Dozzle/Beszel, problemas
   comuns) está em [monitoramento.md](monitoramento.md) e no
-  [README](../README.md); onde eles falam em `:9443`, no servidor novo é
-  o endereço sem porta.
+  [README](../README.md); onde eles falam em `supabase.primati.com.br:9443`,
+  aqui é `supabase.brancaleone.com.br`, sem porta.

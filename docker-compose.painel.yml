@@ -1,0 +1,37 @@
+# Override opcional: um sistema web seu (Node.js) num subdomínio próprio,
+# servido pelo mesmo Nginx do Supabase (porta 443) - ver
+# docs/novo-servidor.md. Requer o override manual-tls.
+#
+#   https://${PROXY_DOMAIN}  -> Supabase (igual a sempre)
+#   https://${PAINEL_DOMAIN} -> o seu sistema (container "painel-web",
+#                               porta 3000, por padrão)
+#
+# O sistema roda no projeto Docker dele (outro repositório), ligado à rede
+# externa "painel", sem publicar porta nenhuma no host. O Nginx encontra o
+# container por essa rede. Enquanto o sistema não estiver no ar, o
+# endereço mostra uma página de "em breve".
+#
+# O certificado precisa ter os dois nomes (-d PROXY_DOMAIN -d PAINEL_DOMAIN).
+#
+# Uso:
+#   docker network create painel         # uma vez
+#   PAINEL_DOMAIN=... no .env
+#   sh run.sh config add painel
+#   sh run.sh start
+
+services:
+  nginx:
+    environment:
+      PAINEL_DOMAIN: ${PAINEL_DOMAIN:?Defina PAINEL_DOMAIN no .env - veja docs/novo-servidor.md}
+      # Onde o Nginx encontra o sistema, pela rede "painel".
+      PAINEL_UPSTREAM: ${PAINEL_UPSTREAM:-http://painel-web:3000}
+    networks:
+      - default
+      - painel
+    volumes:
+      - ./volumes/proxy/manual-tls/sites/painel.conf.tpl:/etc/nginx/templates/extra/painel.conf.tpl:ro
+
+networks:
+  painel:
+    external: true
+    name: painel

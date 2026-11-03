@@ -152,6 +152,12 @@ services:
         case "$$SUPABASE_PROXY_PORT" in 443) HTTPS_PORT_SUFFIX="" ;; *) HTTPS_PORT_SUFFIX=":$$SUPABASE_PROXY_PORT" ;; esac
         export HTTPS_PORT_SUFFIX
         envsubst '$$PROXY_DOMAIN $$HTTPS_PORT_SUFFIX' < /etc/nginx/templates/nginx.conf.tpl > /etc/nginx/conf.d/default.conf
+        # Sites extras (ex.: docker-compose.painel.yml monta o dele aqui).
+        for t in /etc/nginx/templates/extra/*.conf.tpl; do
+          [ -e "$$t" ] || continue
+          n="$${t##*/}"
+          envsubst '$$PROXY_DOMAIN $$PAINEL_DOMAIN $$PAINEL_UPSTREAM' < "$$t" > "/etc/nginx/conf.d/extra-$${n%.tpl}"
+        done
         exec nginx -g 'daemon off;'
     volumes:
       - ./volumes/proxy/manual-tls/nginx.conf.tpl:/etc/nginx/templates/nginx.conf.tpl:ro
