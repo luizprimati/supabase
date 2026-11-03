@@ -807,11 +807,25 @@ function hashPassword(password) {
   return { salt, hash };
 }
 
-function verifyPassword(password, salt, hash) {
-  const derived = crypto.scryptSync(password, salt, 64);
-  const expected = Buffer.from(hash, 'hex');
-  if (derived.length !== expected.length) return false;
-  return crypto.timingSafeEqual(derived, expected);
+// Assíncrono (o scrypt roda no threadpool do Node): uma enxurrada de
+// tentativas de login não trava as outras requisições - o auth_request de
+// toda página do Studio, do /admin, do Dozzle e do Beszel passa por este
+// processo. Usuário inexistente também paga um scrypt, para o tempo de
+// resposta não revelar quais usuários existem. Nunca rejeita: qualquer
+// erro (usuário com salt/hash quebrado no arquivo) vira "senha errada".
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+function verifyPassword(password, user) {
+  return new Promise((resolve) => {
+    try {
+      crypto.scrypt(String(password), user ? String(user.salt) : DUMMY_SALT, 64, (err, derived) => {
+        if (err || !user) { resolve(false); return; }
+        const expected = Buffer.from(String(user.hash), 'hex');
+        resolve(derived.length === expected.length && crypto.timingSafeEqual(derived, expected));
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 function findUser(users, username) {
@@ -825,11 +839,18 @@ function isAdmin(user) {
 // O nome de usuário é codificado em base64url antes de entrar no token:
 // o alfabeto do base64url nunca contém ".", então usuários com ponto no
 // nome (ex: "luiz.primati") não quebram o split('.') abaixo.
-function makeToken(username) {
+//
+// A assinatura também cobre o salt+hash da senha atual do usuário (que não
+// vão no token): trocar a senha (em /admin -> Usuários) derruba na hora
+// todas as sessões abertas daquele usuário, inclusive um cookie roubado.
+function sessionSignature(encodedUser, expires, user) {
+  return sign(`${encodedUser}.${expires}.${user.salt}:${user.hash}`);
+}
+
+function makeToken(user) {
   const expires = Date.now() + SESSION_HOURS * 3600 * 1000;
-  const encodedUser = Buffer.from(username, 'utf8').toString('base64url');
-  const payload = `${encodedUser}.${expires}`;
-  return Buffer.from(`${payload}.${sign(payload)}`).toString('base64url');
+  const encodedUser = Buffer.from(user.username, 'utf8').toString('base64url');
+  return Buffer.from(`${encodedUser}.${expires}.${sessionSignature(encodedUser, expires, user)}`).toString('base64url');
 }
 
 // Uma linha por tentativa de login no log deste container (aparece no
@@ -844,8 +865,9 @@ function logLoginAttempt(ok, username, user, req) {
 }
 
 // Retorna o username validado do cookie, ou null. Reconfirma que o
-// usuário ainda existe no arquivo - permite revogar acesso na hora só
-// removendo a entrada, sem esperar o cookie expirar. Vale para cada
+// usuário ainda existe no arquivo e que a senha não mudou desde o login -
+// permite revogar acesso na hora removendo a entrada ou trocando a senha,
+// sem esperar o cookie expirar. Vale para cada
 // requisição nova: um stream já aberto do Dozzle/Beszel continua até cair
 // (ver "Tirar o acesso de alguém" em docs/monitoramento.md).
 function usernameFromToken(token) {
@@ -854,9 +876,10 @@ function usernameFromToken(token) {
     if (parts.length !== 3) return null;
     const [encodedUser, expiresStr, sig] = parts;
     if (Date.now() > parseInt(expiresStr, 10)) return null;
-    if (!safeEqual(sig, sign(`${encodedUser}.${expiresStr}`))) return null;
     const username = Buffer.from(encodedUser, 'base64url').toString('utf8');
-    return findUser(loadUsers(), username) ? username : null;
+    const user = findUser(loadUsers(), username);
+    if (!user) return null;
+    return safeEqual(sig, sessionSignature(encodedUser, expiresStr, user)) ? username : null;
   } catch {
     return null;
   }
@@ -3771,28 +3794,34 @@ function handleRequest(req, res) {
       const password = String(form.password || '');
       const redirect = String(form.rd || '/');
       const user = findUser(loadUsers(), username);
-      const ok = Boolean(user) && verifyPassword(password, user.salt, user.hash);
-      logLoginAttempt(ok, username, user, req);
-      if (ok) {
-        // Sem um destino específico (rd só veio "/" ou "/login"): usuário
-        // comum vai direto pro Supabase; admin cai de volta em /login,
-        // que já sabe se mostrar como hub pra quem está logado.
-        let finalRedirect = redirect;
-        if (redirect === '/' || redirect === '/login') {
-          finalRedirect = isAdmin(user) ? '/login' : '/';
+      verifyPassword(password, user).then((ok) => {
+        logLoginAttempt(ok, username, user, req);
+        if (ok) {
+          // Sem um destino específico (rd só veio "/" ou "/login"): usuário
+          // comum vai direto pro Supabase; admin cai de volta em /login,
+          // que já sabe se mostrar como hub pra quem está logado.
+          let finalRedirect = redirect;
+          if (redirect === '/' || redirect === '/login') {
+            finalRedirect = isAdmin(user) ? '/login' : '/';
+          }
+          res.writeHead(302, {
+            'Set-Cookie': `${COOKIE_NAME}=${makeToken(user)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}`,
+            Location: finalRedirect,
+          });
+          res.end();
+        } else {
+          // Pequeno atraso proposital para dificultar força bruta (o limite
+          // de tentativas por IP fica no Nginx, ver "location /login").
+          setTimeout(() => {
+            res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(renderPage({ error: 'Usuário ou senha incorretos.', redirect }));
+          }, 400);
         }
-        res.writeHead(302, {
-          'Set-Cookie': `${COOKIE_NAME}=${makeToken(username)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}`,
-          Location: finalRedirect,
-        });
+      }).catch((err) => {
+        console.error('Erro no login:', err);
+        if (!res.headersSent) { res.writeHead(500); }
         res.end();
-      } else {
-        // Pequeno atraso proposital para dificultar força bruta.
-        setTimeout(() => {
-          res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(renderPage({ error: 'Usuário ou senha incorretos.', redirect }));
-        }, 400);
-      }
+      });
     });
     return;
   }
@@ -3876,11 +3905,19 @@ function handleRequest(req, res) {
             if (isLastAdmin) { sendJson(res, 400, { error: 'Não é possível remover o último administrador.' }); return; }
             target.role = data.role === 'admin' ? 'admin' : 'user';
           }
+          let passwordChanged = false;
           if (typeof data.password === 'string' && data.password) {
             if (data.password.length < 8) { sendJson(res, 400, { error: 'A senha precisa ter ao menos 8 caracteres.' }); return; }
             Object.assign(target, hashPassword(data.password));
+            passwordChanged = true;
           }
           if (!trySaveUsers(res, users)) return;
+          // Senha nova derruba as sessões abertas do usuário (ver
+          // makeToken). Se foi a própria senha, esta sessão ganha um cookie
+          // novo para o admin não cair do painel ao salvar.
+          if (passwordChanged && target.username === user.username) {
+            res.setHeader('Set-Cookie', `${COOKIE_NAME}=${makeToken(target)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}`);
+          }
           sendJson(res, 200, { username: target.username, role: target.role });
         });
         return;
@@ -4332,13 +4369,17 @@ function handleRequest(req, res) {
         const username = typeof data.username === 'string' ? data.username.trim() : '';
         const password = typeof data.password === 'string' ? data.password : '';
         const confirmUser = findUser(loadUsers(), username);
-        if (!confirmUser || !isAdmin(confirmUser) || !verifyPassword(password, confirmUser.salt, confirmUser.hash)) {
-          sendJson(res, 401, { error: 'Usuário ou senha inválidos.' });
-          return;
-        }
-
-        runSchemaPublishInBackground(schemas);
-        sendJson(res, 200, { started: true });
+        verifyPassword(password, confirmUser).then((ok) => {
+          if (!ok || !isAdmin(confirmUser)) {
+            sendJson(res, 401, { error: 'Usuário ou senha inválidos.' });
+            return;
+          }
+          runSchemaPublishInBackground(schemas);
+          sendJson(res, 200, { started: true });
+        }).catch((err) => {
+          console.error('Erro ao publicar schemas:', err);
+          if (!res.headersSent) sendJson(res, 500, { error: 'Erro interno.' });
+        });
       });
       return;
     }

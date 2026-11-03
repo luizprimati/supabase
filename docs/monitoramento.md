@@ -164,7 +164,9 @@ Destinos: webhook, Slack, Discord ou ntfy.
 ## Tirar o acesso de alguém
 
 Remover ou rebaixar um admin no `/admin` bloqueia na hora qualquer acesso
-novo ao `/dozzle/` e ao `/beszel/`. Mas os logs e gráficos que essa pessoa
+novo ao `/dozzle/` e ao `/beszel/`. Trocar a senha de alguém em `/admin` →
+**Usuários** também desconecta essa pessoa na hora (todas as sessões, em
+qualquer aparelho); quem troca a própria senha continua conectado só ali. Mas os logs e gráficos que essa pessoa
 já tem abertos continuam chegando até ela fechar a aba. Para cortar na
 hora:
 

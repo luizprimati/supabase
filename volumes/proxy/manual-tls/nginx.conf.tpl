@@ -24,14 +24,25 @@ map $upstream_http_content_type $api_gw_csp {
 }
 
 # Escrita (POST, PUT, DELETE...) vinda de OUTRO site do mesmo domínio
-# (outra porta ou subdomínio de primati.com.br), que leva o cookie
-# SameSite=Lax junto. As telas do /admin e do monitoramento sempre mandam
-# "same-origin"; curl e navegadores antigos não mandam nada e passam.
+# (outra porta ou outro subdomínio, como o sistema web do painel no
+# servidor novo), que leva o cookie SameSite=Lax junto. Bloqueada no
+# Studio (a API dele roda SQL como superusuário, sem proteção própria), no
+# /admin e no monitoramento. As telas deles sempre mandam "same-origin";
+# curl e navegadores antigos não mandam nada e passam.
 map "$request_method:$http_sec_fetch_site" $cross_site_write {
     default 0;
     "~^(GET|HEAD|OPTIONS):" 0;
     "~:(same-site|cross-site)$" 1;
 }
+
+# Limite de tentativas de login por IP: 10 por minuto, com folga para 5
+# seguidas (quem erra a senha algumas vezes não sente). Só o POST conta
+# (chave vazia = sem limite), então abrir a tela de login nunca é barrado.
+map $request_method $login_post_key {
+    default "";
+    POST    $binary_remote_addr;
+}
+limit_req_zone $login_post_key zone=login_post:10m rate=10r/m;
 
 # Porta 80 (HTTP). Só chega aqui com o override docker-compose.http.yml,
 # que publica a 80 do host - no servidor com a rádio ela é do AzuraCast e
@@ -105,7 +116,17 @@ server {
     }
 
     location /login {
+        limit_req zone=login_post burst=5 nodelay;
+        limit_req_status 429;
+        error_page 429 = @login_muitas_tentativas;
         proxy_pass http://login:8085;
+    }
+
+    location @login_muitas_tentativas {
+        default_type text/html;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After "60" always;
+        return 429 '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Muitas tentativas</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;background:#0b0b0c;color:#e8e8e8}main{text-align:center;padding:24px}h1{font-size:24px;margin:0 0 8px}p{color:#a0a0a0;margin:0 0 16px}a{color:#e8e8e8}</style></head><body><main><h1>Muitas tentativas de login</h1><p>Espere um minuto e tente de novo.</p><a href="/login">Voltar ao login</a></main></body></html>';
     }
 
     location /logout {
@@ -136,6 +157,9 @@ server {
     }
 
     location / {
+        # Ver $cross_site_write lá em cima: um formulário vindo de outro
+        # subdomínio chegaria à API do Studio com o cookie do admin.
+        if ($cross_site_write) { return 403; }
         auth_request /internal-auth;
         error_page 401 = @login_redirect;
         proxy_pass http://studio:3000;

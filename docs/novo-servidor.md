@@ -194,22 +194,32 @@ os e-mails de confirmação e os logins do Auth mandam o usuário de volta)
 aponta para o sistema web do painel.
 
 ```bash
-. ~/novo-servidor.conf && cd ~ && git clone https://github.com/luizprimati/supabase.git && cd ~/supabase \
+. ~/novo-servidor.conf && cd ~ && { [ -d ~/supabase/.git ] || git clone https://github.com/luizprimati/supabase.git; } && cd ~/supabase \
+  && { [ ! -d volumes/db/data ] || { echo 'O banco já foi criado: não gere chaves novas.'; false; }; } \
   && cp .env.example .env && chmod 600 .env \
-  && sh utils/generate-keys.sh --update-env > /dev/null \
-  && sh utils/add-new-auth-keys.sh --update-env > /dev/null \
+  && { sh utils/generate-keys.sh --update-env > /dev/null && sh utils/add-new-auth-keys.sh --update-env > /dev/null \
+       || { echo 'Falhou ao gerar as chaves: rode cada script sem "> /dev/null" para ver o erro.'; false; }; } \
   && sed -i \
        -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=https://$DOMINIO|" \
        -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$DOMINIO/auth/v1|" \
        -e "s|^SITE_URL=.*|SITE_URL=https://$PAINEL|" \
-       -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$DOMINIO|" .env \
+       -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$DOMINIO|" \
+       -e "s|^ENABLE_PHONE_SIGNUP=.*|ENABLE_PHONE_SIGNUP=false|" \
+       -e "s|^ENABLE_PHONE_AUTOCONFIRM=.*|ENABLE_PHONE_AUTOCONFIRM=false|" .env \
   && printf '\nSUPABASE_PROXY_PORT=443\nPAINEL_DOMAIN=%s\nPROJECT_TITLE=Brancaleone\nPROJECT_TAGLINE=Painel administrativo\nBESZEL_USER_PASSWORD=%s\n' "$PAINEL" "$(openssl rand -hex 24)" >> .env \
-  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE)=' .env \
+  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE|ENABLE_PHONE_SIGNUP|ENABLE_PHONE_AUTOCONFIRM)=' .env \
   && grep -c '^JWT_SECRET=.\{32,\}' .env
 ```
 
-Tem que aparecer as sete linhas com os seus endereços e, na última, `1`
-(o `JWT_SECRET` foi gerado).
+Tem que aparecer as nove linhas (sete com os seus endereços e as duas
+`ENABLE_PHONE_*` com `false`) e, na última, `1` (o `JWT_SECRET` foi
+gerado). O cadastro por telefone fica desligado porque não há provedor
+de SMS: ligado, qualquer pessoa criaria uma conta já confirmada, sem
+receber SMS nenhum.
+
+Se o bloco parar no meio, corrija e rode de novo: ele não baixa o
+projeto duas vezes. Depois do passo 6 ele se recusa a rodar, para não
+trocar as senhas de um banco que já existe.
 
 ## 6. Subir tudo
 
@@ -319,7 +329,7 @@ sistema; se ele parar, volta a página de "em breve".
 No repositório do sistema, um `Dockerfile` (exemplo para Node.js):
 
 ```dockerfile
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
@@ -364,6 +374,25 @@ Regras para o sistema funcionar atrás do Nginx:
   *deploy key* só de leitura, como o chat-IA faz no servidor atual (ver
   [servidor.md](servidor.md)).
 
+Use uma versão do Node com suporte (a 20 parou de receber correções de
+segurança em abril de 2026). Ao lado do `Dockerfile`, um `.dockerignore`,
+para o `.env` e o `node_modules` do seu computador não entrarem na imagem:
+
+```
+.env
+.git
+node_modules
+```
+
+**Primeira vez no servidor:** baixe o sistema e crie o `.env` dele (ele
+não vem no `git clone`). Nele vão `SUPABASE_URL=https://supabase.brancaleone.com.br`,
+a chave pública e o que mais o sistema usar:
+
+```bash
+cd ~ && git clone URL_DO_REPOSITORIO pasta-do-sistema && cd ~/pasta-do-sistema \
+  && touch .env && chmod 600 .env && nano .env
+```
+
 Subir e atualizar: `cd ~/pasta-do-sistema && git pull --ff-only && docker compose up -d --build`.
 Os logs dele aparecem no Dozzle (`painel-web`).
 
@@ -403,10 +432,16 @@ linhas de pontos e `+` enquanto a chave é gerada; é normal.
 . ~/novo-servidor.conf && [ -n "$IP" ] && sudo mkdir -p /etc/letsencrypt/live/"$IP" /var/www/certbot \
   && sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=$IP" -addext "subjectAltName=IP:$IP" \
        -keyout /etc/letsencrypt/live/"$IP"/privkey.pem -out /etc/letsencrypt/live/"$IP"/fullchain.pem \
-  && sudo ls /etc/letsencrypt/live/"$IP"/
+  && sudo ls /etc/letsencrypt/live/"$IP"/ \
+  && sudo openssl x509 -in /etc/letsencrypt/live/"$IP"/fullchain.pem -noout -fingerprint -sha256
 ```
 
-O esperado na última linha: `fullchain.pem  privkey.pem`.
+O esperado: `fullchain.pem  privkey.pem` e, na última linha,
+`sha256 Fingerprint=AB:CD:...`. **Anote essa impressão digital**: é o
+que diferencia o seu certificado provisório de um falso. Quem estiver no
+meio do caminho (um Wi-Fi público, por exemplo) pode mostrar o mesmo
+aviso no navegador com outro certificado, e aí veria a senha que você
+digitar.
 
 **I.3. Baixar o projeto e gerar as chaves** (no lugar do passo 5). É o
 mesmo bloco do passo 5, com o IP no lugar do domínio do Supabase. O
@@ -414,21 +449,26 @@ mesmo bloco do passo 5, com o IP no lugar do domínio do Supabase. O
 painel.
 
 ```bash
-. ~/novo-servidor.conf && [ -n "$IP" ] && cd ~ && git clone https://github.com/luizprimati/supabase.git && cd ~/supabase \
+. ~/novo-servidor.conf && [ -n "$IP" ] && cd ~ && { [ -d ~/supabase/.git ] || git clone https://github.com/luizprimati/supabase.git; } && cd ~/supabase \
+  && { [ ! -d volumes/db/data ] || { echo 'O banco já foi criado: não gere chaves novas.'; false; }; } \
   && cp .env.example .env && chmod 600 .env \
-  && sh utils/generate-keys.sh --update-env > /dev/null \
-  && sh utils/add-new-auth-keys.sh --update-env > /dev/null \
+  && { sh utils/generate-keys.sh --update-env > /dev/null && sh utils/add-new-auth-keys.sh --update-env > /dev/null \
+       || { echo 'Falhou ao gerar as chaves: rode cada script sem "> /dev/null" para ver o erro.'; false; }; } \
   && sed -i \
        -e "s|^SUPABASE_PUBLIC_URL=.*|SUPABASE_PUBLIC_URL=https://$IP|" \
        -e "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$IP/auth/v1|" \
        -e "s|^SITE_URL=.*|SITE_URL=https://$PAINEL|" \
-       -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$IP|" .env \
+       -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=$IP|" \
+       -e "s|^ENABLE_PHONE_SIGNUP=.*|ENABLE_PHONE_SIGNUP=false|" \
+       -e "s|^ENABLE_PHONE_AUTOCONFIRM=.*|ENABLE_PHONE_AUTOCONFIRM=false|" .env \
   && printf '\nSUPABASE_PROXY_PORT=443\nPAINEL_DOMAIN=%s\nPROJECT_TITLE=Brancaleone\nPROJECT_TAGLINE=Painel administrativo\nBESZEL_USER_PASSWORD=%s\n' "$PAINEL" "$(openssl rand -hex 24)" >> .env \
-  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE)=' .env \
+  && grep -E '^(SUPABASE_PUBLIC_URL|API_EXTERNAL_URL|SITE_URL|PROXY_DOMAIN|SUPABASE_PROXY_PORT|PAINEL_DOMAIN|PROJECT_TITLE|ENABLE_PHONE_SIGNUP|ENABLE_PHONE_AUTOCONFIRM)=' .env \
   && grep -c '^JWT_SECRET=.\{32,\}' .env
 ```
 
-Tem que aparecer as sete linhas (três delas com o IP) e, na última, `1`.
+Tem que aparecer as nove linhas (três com o IP e as duas
+`ENABLE_PHONE_*` com `false`, ver o passo 5) e, na última, `1`. Se parar
+no meio, corrija e rode de novo; depois do I.4 ele se recusa a rodar.
 
 **I.4. Subir tudo** (no lugar do passo 6). Igual ao passo 6, mas ainda
 sem o override `painel` e sem a parte do certbot:
@@ -446,8 +486,14 @@ cd ~/supabase \
 A última linha deve dizer `Successfully saved superuser`.
 
 **I.5. Admin e Beszel:** passos **7 e 8** normais. Onde eles dizem
-`https://supabase.brancaleone.com.br`, abra `https://IP_DO_SERVIDOR` e
-aceite o aviso do navegador uma vez.
+`https://supabase.brancaleone.com.br`, abra `https://IP_DO_SERVIDOR`.
+**Antes de digitar qualquer senha**, confira o certificado: no Chrome ou
+no Edge, clique em **Não seguro** (na barra de endereço) → **O
+certificado não é válido**; no Firefox, na tela de aviso, **Avançado →
+Ver certificado**. A impressão digital **SHA-256** tem que ser a do I.2 (o
+navegador pode mostrar em minúsculas e com espaços no lugar dos `:`). Se
+for diferente, não continue. Confira de novo sempre que o aviso aparecer
+num aparelho ou numa rede diferente.
 
 **I.6. Conferir:**
 
@@ -509,7 +555,10 @@ a 80 e a 443 para fora.
 3. Siga a partir do [passo 9](#9-conferir) (conferir), já com os
    domínios. Como o endereço mudou, entre de novo no
    `https://supabase.brancaleone.com.br`: o login feito pelo IP não vale
-   no domínio.
+   no domínio. Se em algum momento da fase do IP você entrou sem conferir
+   a impressão digital, troque a senha do admin em `/admin` →
+   **Usuários**: a troca desconecta na hora todas as sessões abertas com
+   a senha antiga.
 
 ## Opcionais
 
@@ -520,6 +569,12 @@ a 80 e a 443 para fora.
 - **E-mails do Auth** (confirmação de cadastro, troca de senha): o `.env`
   vem com um SMTP de mentira (`SMTP_*`). Para o sistema mandar e-mail de
   verdade, preencha com um provedor real.
+- **Cadastro de usuários do sistema:** se ninguém de fora deve criar
+  conta (só você cadastra, pelo Studio → **Authentication → Add user**),
+  ponha `DISABLE_SIGNUP=true` no `~/supabase/.env` e rode
+  `sh run.sh start`. O cadastro por telefone (desligado no passo 5) só deve voltar
+  com um provedor de SMS configurado, e nunca com
+  `ENABLE_PHONE_AUTOCONFIRM=true`.
 - **Painel de Schemas** publicando sozinho: [schemas-panel.md](schemas-panel.md).
 
 ## Manutenção
@@ -531,7 +586,7 @@ a 80 e a 443 para fora.
   `sudo journalctl -u certbot.service --since -7d --no-pager`. Não desligue
   o override `http`: sem a porta 80, a renovação para de funcionar.
 - **Atualizar o Supabase** quando houver novidade neste repositório:
-  `cd ~/supabase && git pull --ff-only && sh run.sh start` (recria só o
+  `cd ~/supabase && git pull --ff-only && sh run.sh start && sh run.sh restart nginx` (recria só o
   que mudou) e, se mudou algo em `volumes/proxy/manual-tls/` (Nginx, login
   ou o site do painel), `sh run.sh recreate login nginx`.
 - **Outro endereço no certificado** (um terceiro subdomínio, por
